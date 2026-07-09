@@ -1,12 +1,40 @@
+<script setup lang="ts">
+import logo from '@/shared/assets/logo.png'
+
+const navItems = [
+  { label: 'Изменения', active: false },
+  { label: 'Список систем', active: true },
+  { label: 'Классификация', active: false },
+  { label: 'Сравнение', active: false },
+  { label: 'Настройки', active: false },
+]
+</script>
+
 <template>
-  <main class="app-shell">
-    <section class="hero">
-      <p class="hero__eyebrow">Vue 3 + Go</p>
-      <h1>Новый сервис</h1>
-      <p class="hero__text">
-        Базовый каркас проекта готов: frontend, backend, архитектурные слои и
-        proxy для API.
-      </p>
-    </section>
-  </main>
+  <div class="app">
+    <header class="site-header">
+      <div class="header-container">
+        <div class="main-header__inner">
+          <a class="brand-link" href="/" aria-label="Технониколь Светофор онлайн">
+            <img :src="logo" alt="Технониколь Светофор онлайн" />
+          </a>
+
+          <nav class="primary-nav" aria-label="Основная навигация">
+            <button
+              v-for="item in navItems"
+              :key="item.label"
+              class="primary-nav__item"
+              :class="{ 'is-active': item.active }"
+              type="button"
+            >
+              {{ item.label }}
+            </button>
+          </nav>
+
+        </div>
+      </div>
+    </header>
+
+    <main class="page-main" />
+  </div>
 </template>
