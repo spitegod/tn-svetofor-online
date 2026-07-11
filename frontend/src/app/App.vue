@@ -4,6 +4,8 @@ import logo from '@/shared/assets/logo.png'
 import folderIcon from '@/shared/assets/folder.png'
 import openIcon from '@/shared/assets/open.png'
 import browseIcon from '@/shared/assets/browse.png'
+import trashIcon from '@/shared/assets/trash.png'
+import reverseIcon from '@/shared/assets/reverse.png'
 
 const activePage = ref('systems')
 
@@ -147,6 +149,45 @@ const classificationSystems = systemRows.slice(0, 15).map((row, index) => ({
         ? 'Разрешенная'
         : 'Запрещенная',
   base: index % 2 === 0 ? 'ПВХ-мембрана' : 'Плоских И.',
+}))
+
+const comparisonOrders = [
+  '№ ТД-Р-143 от 24.10.2025',
+  '№ ТД-Р-126 от 13.09.2022',
+  '№ ТД-Р-85 от 05.05.2020',
+]
+
+const comparisonRows = [
+  {
+    name: 'ТН-СТИЛОБАТ КЛАССИК АВТО',
+    values: ['Разрешенная', 'Разрешенная', 'Рекомендованная'],
+  },
+  {
+    name: 'ТН-СТИЛОБАТ КЛАССИК ТРОТУАР',
+    values: ['Рекомендованная', 'Рекомендованная', 'Рекомендованная'],
+  },
+  {
+    name: 'ТН-СТИЛОБАТ КЛАССИК АВТО',
+    values: ['Рекомендованная', 'Разрешенная', 'Разрешенная'],
+  },
+  {
+    name: 'ТН-КРОВЛЯ Гарант',
+    values: ['Запрещенная', 'Разрешенная', 'н/д'],
+  },
+]
+
+const databaseOrders = [
+  { name: '№ ТД-Р-143 от 24.10.2025', createdAt: '24.10.25', updatedAt: '09.07.26' },
+  { name: '№ ТД-Р-126 от 13.09.2022', createdAt: '13.09.22', updatedAt: '09.07.26' },
+  { name: '№ ТД-Р-85 от 05.05.2020', createdAt: '05.05.20', updatedAt: '09.07.26' },
+]
+
+const documentRows = Array.from({ length: 4 }, (_, index) => ({
+  id: index + 1,
+  name: 'ТН-СТИЛОБАТ КЛАССИК АВТО',
+  comment:
+    'Тут комментарий может отображаться в несколько строк, если много текста нужно оставить',
+  document: 'название документа',
 }))
 
 const selectedOrder = ref(orders[0])
@@ -702,6 +743,265 @@ function pageTitle() {
             </button>
           </aside>
         </div>
+      </section>
+
+      <section v-else-if="activePage === 'comparison'" class="comparison-page">
+        <div class="comparison-controls">
+          <h1>Выбрать распоряжения, изменения классов систем по которым нужно сравнить</h1>
+
+          <div class="comparison-controls__row">
+            <div
+              v-for="(order, index) in comparisonOrders"
+              :key="order"
+              class="custom-select comparison-order"
+              :class="{ 'is-open': openedSelect === `comparison-${index}` }"
+            >
+              <button class="custom-select__button" type="button" @click.stop="toggleSelect(`comparison-${index}`)">
+                <span>{{ order }}</span>
+                <i aria-hidden="true" />
+              </button>
+              <Transition name="select-menu">
+                <div v-if="openedSelect === `comparison-${index}`" class="custom-select__menu">
+                  <button
+                    v-for="option in orders"
+                    :key="option"
+                    class="custom-select__option"
+                    :class="{ 'is-selected': option === order }"
+                    type="button"
+                    @click="openedSelect = null"
+                  >
+                    {{ option }}
+                  </button>
+                </div>
+              </Transition>
+            </div>
+
+            <button class="comparison-add-button" type="button" aria-label="Добавить распоряжение">+</button>
+          </div>
+        </div>
+
+        <div class="systems-table comparison-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Название системы</th>
+                <th v-for="order in comparisonOrders" :key="order">
+                  {{ order.replace('№ ', '№\u00A0').replace(' от ', ' от\n') }}
+                </th>
+                <th>Удалить из сравнения</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in comparisonRows" :key="`${row.name}-${row.values.join('-')}`">
+                <td>{{ row.name }}</td>
+                <td
+                  v-for="value in row.values"
+                  :key="value"
+                  :class="classModifier(value) && `status-cell status-cell--${classModifier(value)}`"
+                >
+                  {{ value }}
+                </td>
+                <td>
+                  <button class="comparison-delete-button" type="button" aria-label="Удалить из сравнения">
+                    <img :src="trashIcon" alt="" aria-hidden="true" />
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section v-else-if="activePage === 'settings'" class="settings-page">
+        <section class="settings-section parser-settings" aria-labelledby="parser-settings-title">
+          <h1 id="parser-settings-title">Парсинг навигатора</h1>
+          <label class="settings-inline-field">
+            <span>Частота обновления БД фильтров и ссылок на системы</span>
+            <input type="text" value="XX дней" />
+          </label>
+        </section>
+
+        <section class="settings-section" aria-labelledby="orders-db-title">
+          <div class="settings-section__header">
+            <h2 id="orders-db-title">Управление БД Распоряжений</h2>
+          </div>
+
+          <div class="systems-table settings-orders-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Распоряжение</th>
+                  <th>Дата создания</th>
+                  <th>Последняя актуализация</th>
+                  <th>Удалить БД</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="order in databaseOrders" :key="order.name">
+                  <td>{{ order.name }}</td>
+                  <td>{{ order.createdAt }}</td>
+                  <td>{{ order.updatedAt }}</td>
+                  <td>
+                    <button class="icon-action-button" type="button" aria-label="Удалить БД">
+                      <img :src="trashIcon" alt="" aria-hidden="true" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="create-order-line">
+            <span>Создать новую БД распоряжений</span>
+            <button class="small-red-button" type="button">+</button>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="edit-db-title">
+          <div class="settings-section__header">
+            <h2 id="edit-db-title">Редактирование БД</h2>
+          </div>
+
+          <div class="settings-edit-select">
+            <span>Выбрать БД распоряжения для редактирования</span>
+            <div class="custom-select" :class="{ 'is-open': openedSelect === 'settings-order' }">
+              <button class="custom-select__button" type="button" @click.stop="toggleSelect('settings-order')">
+                <span>{{ selectedOrder }}</span>
+                <i aria-hidden="true" />
+              </button>
+              <Transition name="select-menu">
+                <div v-if="openedSelect === 'settings-order'" class="custom-select__menu">
+                  <button
+                    v-for="order in orders"
+                    :key="order"
+                    class="custom-select__option"
+                    :class="{ 'is-selected': order === selectedOrder }"
+                    type="button"
+                    @click="selectValue('order', order)"
+                  >
+                    {{ order }}
+                  </button>
+                </div>
+              </Transition>
+            </div>
+          </div>
+
+          <section class="settings-table-block" aria-label="Таблица 1">
+            <div class="settings-table-toolbar">
+              <span>Таблица 1</span>
+              <label class="settings-search">
+                <input type="search" placeholder="Поиск по названию или ЕКН" />
+              </label>
+              <button class="import-button" type="button">Импортировать таблицу</button>
+            </div>
+
+            <div class="systems-table settings-data-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th rowspan="2">Название системы</th>
+                    <th colspan="2">Класс</th>
+                  </tr>
+                  <tr>
+                    <th>было</th>
+                    <th>стало</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in changesRows" :key="`settings-${row.name}-${row.before}-${row.after}`">
+                    <td>{{ row.name }}</td>
+                    <td :class="classModifier(row.before) && `status-cell status-cell--${classModifier(row.before)}`">
+                      {{ row.before }}
+                    </td>
+                    <td :class="classModifier(row.after) && `status-cell status-cell--${classModifier(row.after)}`">
+                      {{ row.after }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="settings-table-block" aria-label="Таблица 2">
+            <div class="settings-table-toolbar">
+              <span>Таблица 2</span>
+              <label class="settings-search">
+                <input type="search" placeholder="Поиск по названию или ЕКН" />
+              </label>
+              <button class="import-button" type="button">Импортировать таблицу</button>
+            </div>
+
+            <div class="systems-table settings-data-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Шифр</th>
+                    <th>Название системы</th>
+                    <th>Класс</th>
+                    <th>Куратор</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in systemRows.slice(0, 4)" :key="`settings-system-${row.code}`">
+                    <td>{{ row.code }}</td>
+                    <td>{{ row.name }}</td>
+                    <td :class="`status-cell status-cell--${classModifier(row.systemClass)}`">
+                      {{ row.systemClass }}
+                    </td>
+                    <td>{{ row.curator }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="settings-table-block" aria-label="Таблица 3">
+            <div class="settings-table-toolbar">
+              <span>Таблица 3</span>
+              <label class="settings-search">
+                <input type="search" placeholder="Поиск по названию или ЕКН" />
+              </label>
+            </div>
+
+            <div class="systems-table settings-docs-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Название системы</th>
+                    <th>Комментарий</th>
+                    <th>Документ</th>
+                    <th>Ред. документа</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in documentRows" :key="`document-${row.id}`">
+                    <td>{{ row.name }}</td>
+                    <td>{{ row.comment }}</td>
+                    <td>
+                      <a class="settings-document-link" href="#">
+                        <img :src="openIcon" alt="" aria-hidden="true" />
+                        {{ row.document }}
+                      </a>
+                    </td>
+                    <td>
+                      <div class="document-actions">
+                        <button class="icon-action-button" type="button" aria-label="Открыть папку">
+                          <img :src="folderIcon" alt="" aria-hidden="true" />
+                        </button>
+                        <button class="icon-action-button" type="button" aria-label="Обновить документ">
+                          <img :src="reverseIcon" alt="" aria-hidden="true" />
+                        </button>
+                        <button class="icon-action-button icon-action-button--danger" type="button" aria-label="Удалить документ">
+                          <img :src="trashIcon" alt="" aria-hidden="true" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
       </section>
 
       <section v-else class="placeholder-page">
