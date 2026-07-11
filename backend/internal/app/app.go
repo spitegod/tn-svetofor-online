@@ -13,12 +13,35 @@ import (
 	httpdelivery "tn/backend/internal/delivery/http"
 
 	"tn/backend/internal/config"
+	"tn/backend/internal/db"
+	"tn/backend/internal/repository"
+	"tn/backend/internal/service"
 )
 
 func Run(cfg config.Config) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	database, err := db.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+
+	if err := db.Migrate(ctx, database); err != nil {
+		return err
+	}
+
+	classificationRepo := repository.NewClassificationRepository(database)
+	classificationService := service.NewClassificationService(classificationRepo)
+	systemCatalogRepo := repository.NewSystemCatalogRepository(database)
+	systemCatalogService := service.NewSystemCatalogService(systemCatalogRepo)
+	orderRepo := repository.NewOrderRepository(database)
+	orderService := service.NewOrderService(orderRepo)
+
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpdelivery.NewRouter(),
+		Handler:           httpdelivery.NewRouter(classificationService, systemCatalogService, orderService),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

@@ -47,6 +47,20 @@ button {
   cursor: pointer;
 }
 
+button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.visually-hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 .app {
   min-height: 100vh;
   background: var(--tn-white);
@@ -816,6 +830,27 @@ button {
   background: var(--status-forbidden);
 }
 
+.systems-table .empty-table-cell {
+  height: 72px;
+  color: var(--tn-muted);
+  font-size: 14px;
+  text-align: center;
+  background: #ffffff;
+}
+
+.systems-table td a {
+  color: var(--tn-ink);
+  text-decoration: underline;
+  text-decoration-color: rgba(237, 28, 36, 0.42);
+  text-underline-offset: 3px;
+}
+
+.systems-table td a:hover,
+.systems-table td a:focus-visible {
+  color: var(--tn-red);
+  outline: 0;
+}
+
 .systems-table thead tr:first-child th:nth-child(2),
 .systems-table thead tr:nth-child(2) th {
   text-align: center;
@@ -1185,10 +1220,95 @@ button {
   width: 250px;
 }
 
+.comparison-order__control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  min-height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--tn-line);
+  border-radius: 8px;
+  background: #f3f5f8;
+}
+
 .comparison-order .custom-select__button {
   min-width: 0;
   min-height: 44px;
+  border: 0;
+  border-radius: 0;
   background: #f3f5f8;
+  padding-right: 10px;
+}
+
+.comparison-order__more {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-left: 1px solid #d9e0ea;
+  background: #f3f5f8;
+  color: var(--tn-muted);
+  font-size: 15px;
+  line-height: 1;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.comparison-order__more span {
+  display: block;
+  transform: rotate(90deg);
+}
+
+.comparison-order__more:hover,
+.comparison-order__more:focus-visible {
+  background: #eef1f5;
+  color: var(--tn-red);
+  outline: 0;
+}
+
+.comparison-action-menu {
+  position: absolute;
+  z-index: 35;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 150px;
+  border: 1px solid var(--tn-line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 6px;
+  box-shadow: 0 18px 36px rgba(28, 33, 41, 0.14);
+}
+
+.comparison-action-menu button {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tn-ink);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 8px;
+  text-align: left;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.comparison-action-menu button:hover,
+.comparison-action-menu button:focus-visible {
+  background: rgba(237, 28, 36, 0.08);
+  color: var(--tn-red);
+  outline: 0;
+}
+
+.comparison-action-menu img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
 }
 
 .comparison-add-button {
@@ -1209,6 +1329,16 @@ button {
     box-shadow 160ms ease;
 }
 
+.comparison-add-select {
+  width: 52px;
+}
+
+.comparison-add-menu {
+  right: auto;
+  left: 0;
+  width: 250px;
+}
+
 .comparison-add-button:hover,
 .comparison-add-button:focus-visible {
   background: #c9000b;
@@ -1218,11 +1348,12 @@ button {
 }
 
 .comparison-table {
-  width: min(100%, 1080px);
+  width: 100%;
+  overflow-x: auto;
 }
 
 .comparison-table table {
-  min-width: 980px;
+  min-width: max(980px, 100%);
 }
 
 .comparison-table th {
@@ -1363,6 +1494,33 @@ button {
 .settings-orders-table td:last-child {
   width: 96px;
   text-align: center;
+}
+
+.order-name-input {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--tn-ink);
+  font: inherit;
+  padding: 4px 6px;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.order-name-input:hover {
+  background: #f7f9fc;
+  border-color: #dbe1ea;
+}
+
+.order-name-input:focus {
+  background: #ffffff;
+  border-color: var(--tn-red);
+  box-shadow: 0 0 0 3px rgba(237, 28, 36, 0.12);
+  outline: 0;
 }
 
 .create-order-line {
@@ -1842,6 +2000,17 @@ button {
   line-height: 1;
   text-decoration: underline dotted;
   text-underline-offset: 8px;
+}
+
+.table-message {
+  margin: -4px 0 14px;
+  color: var(--tn-muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.table-message--error {
+  color: var(--tn-red);
 }
 
 @media (max-width: 980px) {
