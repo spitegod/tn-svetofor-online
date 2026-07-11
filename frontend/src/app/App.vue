@@ -126,6 +126,29 @@ const systemRows = systemNames.map((name, index) => ({
   compared: index % 3 === 0,
 }))
 
+const classificationFilterGroups = [
+  'Рекомендации ТЕХНОНИКОЛЬ',
+  'Тип несущего основания системы',
+  'Тип кровли по расположению слоев',
+  'Тип крыши по степени эксплуатации',
+  'Допустимая интенсивность эксплуатационной нагрузки согласно СП17.13330.2017',
+  'Наличие теплоизоляционного слоя',
+  'Тип теплоизоляции',
+  'Метод крепления теплоизоляционного слоя',
+  'Тип гидроизоляции',
+]
+
+const classificationSystems = systemRows.slice(0, 15).map((row, index) => ({
+  ...row,
+  systemClass:
+    index < 9
+      ? 'Рекомендованная'
+      : index < 12
+        ? 'Разрешенная'
+        : 'Запрещенная',
+  base: index % 2 === 0 ? 'ПВХ-мембрана' : 'Плоских И.',
+}))
+
 const selectedOrder = ref(orders[0])
 const selectedBefore = ref(classOptions[0])
 const selectedAfter = ref(classOptions[1])
@@ -555,6 +578,130 @@ function pageTitle() {
           </table>
         </div>
 
+      </section>
+
+      <section v-else-if="activePage === 'classification'" class="classification-page">
+        <div class="classification-topline">
+          <div class="select-field">
+            <span>Распоряжение</span>
+            <div class="custom-select" :class="{ 'is-open': openedSelect === 'order' }">
+              <button class="custom-select__button" type="button" @click.stop="toggleSelect('order')">
+                <span>{{ selectedOrder }}</span>
+                <i aria-hidden="true" />
+              </button>
+              <Transition name="select-menu">
+                <div v-if="openedSelect === 'order'" class="custom-select__menu">
+                  <button
+                    v-for="order in orders"
+                    :key="order"
+                    class="custom-select__option"
+                    :class="{ 'is-selected': order === selectedOrder }"
+                    type="button"
+                    @click="selectValue('order', order)"
+                  >
+                    {{ order }}
+                  </button>
+                </div>
+              </Transition>
+            </div>
+          </div>
+
+          <label class="search-field classification-search">
+            <span>Поиск</span>
+            <input type="search" placeholder="Поиск по названию или ЕКН" />
+          </label>
+        </div>
+
+        <section class="filter-panel classification-construction" aria-label="Тип строительства">
+          <h2>Тип строительства</h2>
+          <div class="type-tabs">
+            <button
+              v-for="type in constructionTypes"
+              :key="type"
+              class="type-tab"
+              :class="{ 'type-tab--active': type === 'Промышленное и гражданское строительство' }"
+              type="button"
+            >
+              {{ type }}
+            </button>
+          </div>
+        </section>
+
+        <section class="system-type-panel classification-system-types" :class="{ 'is-open': isSystemTypesOpen }" aria-label="Тип системы">
+          <button
+            class="system-type-toggle"
+            type="button"
+            :aria-expanded="isSystemTypesOpen"
+            @click="isSystemTypesOpen = !isSystemTypesOpen"
+          >
+            <span class="system-type-toggle__title">Тип системы</span>
+            <span class="system-type-toggle__selected">Выбрано: {{ selectedSystemType.name }}</span>
+            <i aria-hidden="true" />
+          </button>
+
+          <Transition name="system-type-body">
+            <div v-if="isSystemTypesOpen" class="system-type-body">
+              <div class="system-type-grid">
+                <button
+                  v-for="type in systemTypes.slice(0, 16)"
+                  :key="type.name"
+                  class="system-type-card"
+                  :class="{ 'is-active': type.name === selectedSystemType.name }"
+                  type="button"
+                  @click="selectSystemType(type)"
+                >
+                  <strong>{{ type.name }}</strong>
+                  <span>{{ type.count }} систем</span>
+                </button>
+              </div>
+            </div>
+          </Transition>
+        </section>
+
+        <div class="classification-layout">
+          <section class="classification-cards" aria-label="Системы классификации">
+            <article
+              v-for="system in classificationSystems"
+              :key="system.code"
+              class="classification-card"
+              :class="`classification-card--${classModifier(system.systemClass)}`"
+            >
+              <header class="classification-card__header">
+                <a href="https://nav.tn.ru/systems/" target="_blank" rel="noreferrer">{{ system.name }}</a>
+                <a class="classification-card__source" href="https://nav.tn.ru/systems/" target="_blank" rel="noreferrer" aria-label="Открыть на nav.tn.ru">
+                  <img :src="browseIcon" alt="" aria-hidden="true" />
+                </a>
+              </header>
+
+              <dl class="classification-card__meta">
+                <div>
+                  <dt>Шифр</dt>
+                  <dd>{{ system.code }}</dd>
+                </div>
+                <div>
+                  <dt>Класс</dt>
+                  <dd>{{ system.base }}</dd>
+                </div>
+              </dl>
+
+              <button class="classification-card__more" type="button" aria-label="Открыть действия">
+                <i aria-hidden="true" />
+              </button>
+            </article>
+          </section>
+
+          <aside class="classification-sidebar" aria-label="Фильтры классификации">
+            <button
+              v-for="filter in classificationFilterGroups"
+              :key="filter"
+              class="classification-sidebar__item"
+              type="button"
+            >
+              <span>{{ filter }}</span>
+              <i aria-hidden="true" />
+            </button>
+          </aside>
+        </div>
       </section>
 
       <section v-else class="placeholder-page">
