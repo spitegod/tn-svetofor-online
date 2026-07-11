@@ -1,11 +1,78 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import logo from '@/shared/assets/logo.png'
 import folderIcon from '@/shared/assets/folder.png'
 import openIcon from '@/shared/assets/open.png'
 import browseIcon from '@/shared/assets/browse.png'
 import trashIcon from '@/shared/assets/trash.png'
 import reverseIcon from '@/shared/assets/reverse.png'
+
+type ClassificationChange = {
+  id: number
+  orderId: number
+  position: number
+  systemName: string
+  systemUrl: string
+  classBefore: string
+  classAfter: string
+  importedAt: string
+}
+
+type ClassificationStats = {
+  addedSystems: number
+  recommended: number
+  allowed: number
+  classificationChanges: number
+}
+
+type ClassificationResponse = {
+  rows: ClassificationChange[]
+  stats: ClassificationStats
+  beforeOptions: string[]
+  afterOptions: string[]
+}
+
+type SystemCatalogRow = {
+  id: number
+  orderId: number
+  position: number
+  code: string
+  systemName: string
+  systemUrl: string
+  systemClass: string
+  curator: string
+  importedAt: string
+}
+
+type SystemCatalogStats = {
+  total: number
+  recommended: number
+  allowed: number
+  forbidden: number
+  curators: number
+}
+
+type SystemCatalogResponse = {
+  rows: SystemCatalogRow[]
+  stats: SystemCatalogStats
+  classOptions: string[]
+  curatorOptions: string[]
+}
+
+type Order = {
+  id: number
+  name: string
+  createdAt: string
+  updatedAt: string
+}
+
+type ComparisonRow = {
+  key: string
+  name: string
+  values: string[]
+}
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 const activePage = ref('systems')
 
@@ -61,21 +128,8 @@ const systemTypes = [
   { name: 'Комплексные решения', count: 3 },
 ]
 
-const orders = [
-  '№ ТД-Р-143 от 24.10.2025',
-  '№ ТД-Р-118 от 12.09.2025',
-  '№ ТД-Р-097 от 18.08.2025',
-]
-
 const classOptions = ['Рекомендованная', 'Разрешенная', 'Запрещенная']
 const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'Уртенков А.', 'Золотарев М.', 'Кузнецова Н.']
-
-const changesRows = [
-  { name: 'ТН-СТИЛОБАТ КЛАССИК АВТО', before: 'Новая система', after: 'Разрешенная' },
-  { name: 'ТН-СТИЛОБАТ КЛАССИК ТРОТУАР', before: 'Новая система', after: 'Рекомендованная' },
-  { name: 'ТН-СТИЛОБАТ КЛАССИК АВТО', before: 'Новая система', after: 'Разрешенная' },
-  { name: 'ТН-СТИЛОБАТ КЛАССИК', before: 'Рекомендованная', after: 'Разрешенная' },
-]
 
 const systemNames = [
   'ТН-СТИЛОБАТ КЛАССИК АВТО',
@@ -151,37 +205,6 @@ const classificationSystems = systemRows.slice(0, 15).map((row, index) => ({
   base: index % 2 === 0 ? 'ПВХ-мембрана' : 'Плоских И.',
 }))
 
-const comparisonOrders = [
-  '№ ТД-Р-143 от 24.10.2025',
-  '№ ТД-Р-126 от 13.09.2022',
-  '№ ТД-Р-85 от 05.05.2020',
-]
-
-const comparisonRows = [
-  {
-    name: 'ТН-СТИЛОБАТ КЛАССИК АВТО',
-    values: ['Разрешенная', 'Разрешенная', 'Рекомендованная'],
-  },
-  {
-    name: 'ТН-СТИЛОБАТ КЛАССИК ТРОТУАР',
-    values: ['Рекомендованная', 'Рекомендованная', 'Рекомендованная'],
-  },
-  {
-    name: 'ТН-СТИЛОБАТ КЛАССИК АВТО',
-    values: ['Рекомендованная', 'Разрешенная', 'Разрешенная'],
-  },
-  {
-    name: 'ТН-КРОВЛЯ Гарант',
-    values: ['Запрещенная', 'Разрешенная', 'н/д'],
-  },
-]
-
-const databaseOrders = [
-  { name: '№ ТД-Р-143 от 24.10.2025', createdAt: '24.10.25', updatedAt: '09.07.26' },
-  { name: '№ ТД-Р-126 от 13.09.2022', createdAt: '13.09.22', updatedAt: '09.07.26' },
-  { name: '№ ТД-Р-85 от 05.05.2020', createdAt: '05.05.20', updatedAt: '09.07.26' },
-]
-
 const documentRows = Array.from({ length: 4 }, (_, index) => ({
   id: index + 1,
   name: 'ТН-СТИЛОБАТ КЛАССИК АВТО',
@@ -190,45 +213,555 @@ const documentRows = Array.from({ length: 4 }, (_, index) => ({
   document: 'название документа',
 }))
 
-const selectedOrder = ref(orders[0])
-const selectedBefore = ref(classOptions[0])
-const selectedAfter = ref(classOptions[1])
-const selectedClass = ref(classOptions[0])
-const selectedCurator = ref(curatorOptions[0])
+const orders = ref<Order[]>([])
+const selectedOrderId = ref<number | null>(null)
+const comparisonOrderIds = ref<number[]>([])
+const comparisonCatalogByOrder = ref<Record<number, SystemCatalogRow[]>>({})
+const hiddenComparisonRows = ref<string[]>([])
+const isComparisonLoading = ref(false)
+const comparisonError = ref('')
+const isOrdersLoading = ref(false)
+const ordersError = ref('')
+const orderRenameTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 const selectedSystemType = ref(systemTypes[0])
 const isSystemTypesOpen = ref(false)
-const selectedHistorySystem = ref<(typeof systemRows)[number] | null>(null)
+const selectedHistorySystem = ref<{ name: string } | null>(null)
 const isHistoryOpen = ref(false)
 const openedSelect = ref<string | null>(null)
+const openedComparisonMenu = ref<number | null>(null)
+const importFileInput = ref<HTMLInputElement | null>(null)
+const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
+const classificationRows = ref<ClassificationChange[]>([])
+const classificationStats = ref<ClassificationStats>({
+  addedSystems: 0,
+  recommended: 0,
+  allowed: 0,
+  classificationChanges: 0,
+})
+const beforeOptions = ref(['Все', 'Новая система', ...classOptions])
+const afterOptions = ref(['Все', ...classOptions])
+const selectedBeforeFilter = ref('Все')
+const selectedAfterFilter = ref('Все')
+const tableSearch = ref('')
+const isClassificationLoading = ref(false)
+const classificationError = ref('')
+const systemCatalogRows = ref<SystemCatalogRow[]>([])
+const systemCatalogStats = ref<SystemCatalogStats>({
+  total: 0,
+  recommended: 0,
+  allowed: 0,
+  forbidden: 0,
+  curators: 0,
+})
+const systemCatalogClassOptions = ref(['Все', ...classOptions])
+const systemCatalogCuratorOptions = ref(['Все кураторы', ...curatorOptions.slice(1)])
+const systemCatalogSearch = ref('')
+const selectedSystemCatalogClass = ref('Все')
+const selectedSystemCatalogCurator = ref('Все кураторы')
+const isSystemCatalogLoading = ref(false)
+const systemCatalogError = ref('')
+
+function selectedOrderName() {
+  return orders.value.find((order) => order.id === selectedOrderId.value)?.name ?? 'Распоряжение не выбрано'
+}
+
+function comparisonOrderName(orderId: number) {
+  return orders.value.find((order) => order.id === orderId)?.name ?? 'Распоряжение удалено'
+}
+
+function formatOrderDate(value: string) {
+  if (!value) {
+    return ''
+  }
+
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: '2-digit',
+  }).format(new Date(value))
+}
+
+async function loadOrders() {
+  isOrdersLoading.value = true
+  ordersError.value = ''
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/orders`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить распоряжения')
+    }
+
+    orders.value = await response.json()
+    if (!selectedOrderId.value && orders.value.length > 0) {
+      selectedOrderId.value = orders.value[0].id
+    }
+    if (comparisonOrderIds.value.length === 0) {
+      comparisonOrderIds.value = orders.value.map((order) => order.id)
+    } else {
+      comparisonOrderIds.value = comparisonOrderIds.value.filter((id) => orders.value.some((order) => order.id === id))
+    }
+    await loadComparisonCatalogs()
+  } catch (error) {
+    ordersError.value = error instanceof Error ? error.message : 'Не удалось загрузить распоряжения'
+  } finally {
+    isOrdersLoading.value = false
+  }
+}
+
+async function selectOrder(order: Order) {
+  selectedOrderId.value = order.id
+  openedSelect.value = null
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog()])
+}
+
+function comparisonRowKey(row: Pick<SystemCatalogRow, 'code' | 'systemName'>) {
+  const code = row.code.trim()
+  if (code) {
+    return `code:${code.toLowerCase()}`
+  }
+
+  return `name:${row.systemName.trim().toLowerCase()}`
+}
+
+async function loadComparisonCatalog(orderId: number) {
+  comparisonError.value = ''
+
+  const query = new URLSearchParams({ orderId: String(orderId) })
+  const response = await fetch(`${API_BASE_URL}/system-catalog?${query.toString()}`)
+  if (!response.ok) {
+    throw new Error('Не удалось загрузить данные сравнения')
+  }
+
+  const payload: SystemCatalogResponse = await response.json()
+  comparisonCatalogByOrder.value = {
+    ...comparisonCatalogByOrder.value,
+    [orderId]: payload.rows,
+  }
+}
+
+async function loadComparisonCatalogs() {
+  isComparisonLoading.value = true
+  comparisonError.value = ''
+
+  try {
+    await Promise.all(comparisonOrderIds.value.map((orderId) => loadComparisonCatalog(orderId)))
+  } catch (error) {
+    comparisonError.value = error instanceof Error ? error.message : 'Не удалось загрузить данные сравнения'
+  } finally {
+    isComparisonLoading.value = false
+  }
+}
+
+async function createOrder() {
+  const name = window.prompt('Название распоряжения')
+  if (!name?.trim()) {
+    return
+  }
+
+  const response = await fetch(`${API_BASE_URL}/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name.trim() }),
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    ordersError.value = payload?.error ?? 'Не удалось создать распоряжение'
+    return
+  }
+
+  const order: Order = await response.json()
+  orders.value = [order, ...orders.value]
+  selectedOrderId.value = order.id
+  comparisonOrderIds.value = [order.id, ...comparisonOrderIds.value]
+  await loadComparisonCatalog(order.id)
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog()])
+}
+
+async function deleteOrder(order: Order) {
+  if (!window.confirm(`Удалить ${order.name}? Данные таблиц этого распоряжения тоже будут удалены.`)) {
+    return
+  }
+
+  const response = await fetch(`${API_BASE_URL}/orders/${order.id}`, { method: 'DELETE' })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    ordersError.value = payload?.error ?? 'Не удалось удалить распоряжение'
+    return
+  }
+
+  orders.value = orders.value.filter((item) => item.id !== order.id)
+  if (selectedOrderId.value === order.id) {
+    selectedOrderId.value = orders.value[0]?.id ?? null
+  }
+  comparisonOrderIds.value = comparisonOrderIds.value.filter((id) => id !== order.id)
+  const nextCatalogs = { ...comparisonCatalogByOrder.value }
+  delete nextCatalogs[order.id]
+  comparisonCatalogByOrder.value = nextCatalogs
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog()])
+}
+
+function scheduleOrderRename(order: Order) {
+  const previousTimer = orderRenameTimers.get(order.id)
+  if (previousTimer) {
+    window.clearTimeout(previousTimer)
+  }
+
+  orderRenameTimers.set(
+    order.id,
+    window.setTimeout(() => {
+      void saveOrderName(order)
+    }, 350),
+  )
+}
+
+async function saveOrderName(order: Order) {
+  const previousTimer = orderRenameTimers.get(order.id)
+  if (previousTimer) {
+    window.clearTimeout(previousTimer)
+    orderRenameTimers.delete(order.id)
+  }
+
+  const nextName = order.name.trim()
+  if (!nextName) {
+    ordersError.value = 'Название распоряжения не может быть пустым'
+    await loadOrders()
+    return
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/orders/${order.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: nextName }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось сохранить название распоряжения')
+    }
+
+    const updatedOrder: Order = await response.json()
+    const targetOrder = orders.value.find((item) => item.id === updatedOrder.id)
+    if (targetOrder) {
+      Object.assign(targetOrder, updatedOrder)
+    }
+    ordersError.value = ''
+  } catch (error) {
+    ordersError.value = error instanceof Error ? error.message : 'Не удалось сохранить название распоряжения'
+  }
+}
+
+async function selectComparisonOrder(index: number, order: Order) {
+  comparisonOrderIds.value[index] = order.id
+  openedSelect.value = null
+  await loadComparisonCatalog(order.id)
+}
+
+function comparisonOrderOptions(currentOrderId: number) {
+  return orders.value.filter((order) => order.id === currentOrderId || !comparisonOrderIds.value.includes(order.id))
+}
+
+function availableComparisonOrders() {
+  return orders.value.filter((order) => !comparisonOrderIds.value.includes(order.id))
+}
+
+async function addComparisonOrder(order?: Order) {
+  const nextOrder = order ?? availableComparisonOrders()[0]
+  if (nextOrder) {
+    comparisonOrderIds.value.push(nextOrder.id)
+    await loadComparisonCatalog(nextOrder.id)
+  }
+  openedSelect.value = null
+  openedComparisonMenu.value = null
+}
+
+function removeComparisonOrder(orderId: number) {
+  comparisonOrderIds.value = comparisonOrderIds.value.filter((id) => id !== orderId)
+  openedComparisonMenu.value = null
+}
+
+function comparisonRows() {
+  const orderedKeys: string[] = []
+  const namesByKey = new Map<string, string>()
+  const valuesByOrder = new Map<number, Map<string, string>>()
+
+  for (const orderId of comparisonOrderIds.value) {
+    const rows = comparisonCatalogByOrder.value[orderId] ?? []
+    const values = new Map<string, string>()
+
+    for (const row of rows) {
+      const key = comparisonRowKey(row)
+      values.set(key, row.systemClass || 'н/д')
+
+      if (!namesByKey.has(key)) {
+        namesByKey.set(key, row.systemName)
+        orderedKeys.push(key)
+      }
+    }
+
+    valuesByOrder.set(orderId, values)
+  }
+
+  return orderedKeys
+    .filter((key) => !hiddenComparisonRows.value.includes(key))
+    .map((key) => ({
+      key,
+      name: namesByKey.get(key) ?? key,
+      values: comparisonOrderIds.value.map((orderId) => valuesByOrder.get(orderId)?.get(key) ?? 'н/д'),
+    }))
+}
+
+function hideComparisonRow(row: ComparisonRow) {
+  if (!hiddenComparisonRows.value.includes(row.key)) {
+    hiddenComparisonRows.value = [...hiddenComparisonRows.value, row.key]
+  }
+}
+
+function comparisonValue(row: ComparisonRow, index: number) {
+  return row.values[index] ?? 'н/д'
+}
+
+function buildClassificationQuery() {
+  const params = new URLSearchParams()
+  if (selectedOrderId.value) {
+    params.set('orderId', String(selectedOrderId.value))
+  }
+  if (tableSearch.value.trim()) {
+    params.set('q', tableSearch.value.trim())
+  }
+  if (selectedBeforeFilter.value && selectedBeforeFilter.value !== 'Все') {
+    params.set('before', selectedBeforeFilter.value)
+  }
+  if (selectedAfterFilter.value && selectedAfterFilter.value !== 'Все') {
+    params.set('after', selectedAfterFilter.value)
+  }
+
+  return params
+}
+
+function applyClassificationPayload(payload: ClassificationResponse) {
+  classificationRows.value = payload.rows
+  classificationStats.value = payload.stats
+  beforeOptions.value = payload.beforeOptions.length > 1 ? payload.beforeOptions : beforeOptions.value
+  afterOptions.value = payload.afterOptions.length > 1 ? payload.afterOptions : afterOptions.value
+}
+
+async function loadClassificationChanges() {
+  isClassificationLoading.value = true
+  classificationError.value = ''
+
+  try {
+    const query = buildClassificationQuery()
+    const response = await fetch(`${API_BASE_URL}/classification-changes?${query.toString()}`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить таблицу 1')
+    }
+
+    applyClassificationPayload(await response.json())
+  } catch (error) {
+    classificationError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 1'
+  } finally {
+    isClassificationLoading.value = false
+  }
+}
+
+function openTableImport() {
+  importFileInput.value?.click()
+}
+
+async function importTableFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) {
+    return
+  }
+
+  const formData = new FormData()
+  formData.append('file', file)
+  if (selectedOrderId.value) {
+    formData.append('orderId', String(selectedOrderId.value))
+  }
+  isClassificationLoading.value = true
+  classificationError.value = ''
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/classification-changes/import`, {
+      method: 'POST',
+      body: formData,
+    })
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => null)
+      throw new Error(errorPayload?.error ?? 'Не удалось импортировать таблицу')
+    }
+
+    selectedBeforeFilter.value = 'Все'
+    selectedAfterFilter.value = 'Все'
+    tableSearch.value = ''
+    applyClassificationPayload(await response.json())
+  } catch (error) {
+    classificationError.value = error instanceof Error ? error.message : 'Не удалось импортировать таблицу'
+  } finally {
+    isClassificationLoading.value = false
+    input.value = ''
+  }
+}
+
+async function exportClassificationTable() {
+  const query = buildClassificationQuery()
+  const response = await fetch(`${API_BASE_URL}/classification-changes/export?${query.toString()}`)
+  if (!response.ok) {
+    classificationError.value = 'Не удалось экспортировать таблицу'
+    return
+  }
+
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'classification-changes.xlsx'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function currentClassificationRows() {
+  return classificationRows.value
+}
+
+function buildSystemCatalogQuery() {
+  const params = new URLSearchParams()
+  if (selectedOrderId.value) {
+    params.set('orderId', String(selectedOrderId.value))
+  }
+  if (systemCatalogSearch.value.trim()) {
+    params.set('q', systemCatalogSearch.value.trim())
+  }
+  if (selectedSystemCatalogClass.value && selectedSystemCatalogClass.value !== 'Все') {
+    params.set('class', selectedSystemCatalogClass.value)
+  }
+  if (selectedSystemCatalogCurator.value && selectedSystemCatalogCurator.value !== 'Все кураторы') {
+    params.set('curator', selectedSystemCatalogCurator.value)
+  }
+
+  return params
+}
+
+function applySystemCatalogPayload(payload: SystemCatalogResponse) {
+  systemCatalogRows.value = payload.rows
+  systemCatalogStats.value = payload.stats
+  systemCatalogClassOptions.value = payload.classOptions.length > 1 ? payload.classOptions : systemCatalogClassOptions.value
+  systemCatalogCuratorOptions.value =
+    payload.curatorOptions.length > 1 ? ['Все кураторы', ...payload.curatorOptions.filter((option) => option !== 'Все')] : systemCatalogCuratorOptions.value
+}
+
+async function loadSystemCatalog() {
+  isSystemCatalogLoading.value = true
+  systemCatalogError.value = ''
+
+  try {
+    const query = buildSystemCatalogQuery()
+    const response = await fetch(`${API_BASE_URL}/system-catalog?${query.toString()}`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить таблицу 2')
+    }
+
+    const payload: SystemCatalogResponse = await response.json()
+    applySystemCatalogPayload(payload)
+    if (selectedOrderId.value && comparisonOrderIds.value.includes(selectedOrderId.value)) {
+      comparisonCatalogByOrder.value = {
+        ...comparisonCatalogByOrder.value,
+        [selectedOrderId.value]: payload.rows,
+      }
+    }
+  } catch (error) {
+    systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 2'
+  } finally {
+    isSystemCatalogLoading.value = false
+  }
+}
+
+function openSystemCatalogImport() {
+  systemCatalogFileInput.value?.click()
+}
+
+async function importSystemCatalogFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) {
+    return
+  }
+
+  const formData = new FormData()
+  formData.append('file', file)
+  if (selectedOrderId.value) {
+    formData.append('orderId', String(selectedOrderId.value))
+  }
+  isSystemCatalogLoading.value = true
+  systemCatalogError.value = ''
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/system-catalog/import`, {
+      method: 'POST',
+      body: formData,
+    })
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => null)
+      throw new Error(errorPayload?.error ?? 'Не удалось импортировать таблицу 2')
+    }
+
+    selectedSystemCatalogClass.value = 'Все'
+    selectedSystemCatalogCurator.value = 'Все кураторы'
+    systemCatalogSearch.value = ''
+    applySystemCatalogPayload(await response.json())
+  } catch (error) {
+    systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось импортировать таблицу 2'
+  } finally {
+    isSystemCatalogLoading.value = false
+    input.value = ''
+  }
+}
+
+async function exportSystemCatalog() {
+  const query = buildSystemCatalogQuery()
+  const response = await fetch(`${API_BASE_URL}/system-catalog/export?${query.toString()}`)
+  if (!response.ok) {
+    systemCatalogError.value = 'Не удалось экспортировать таблицу 2'
+    return
+  }
+
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'system-catalog.xlsx'
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function currentSystemCatalogRows() {
+  return systemCatalogRows.value
+}
 
 function setPage(page: string) {
   activePage.value = page
   openedSelect.value = null
+  openedComparisonMenu.value = null
 }
 
 function toggleSelect(name: string) {
+  openedComparisonMenu.value = null
   openedSelect.value = openedSelect.value === name ? null : name
 }
 
-function selectValue(name: string, value: string) {
-  const setters: Record<string, (nextValue: string) => void> = {
-    order: (nextValue) => (selectedOrder.value = nextValue),
-    before: (nextValue) => (selectedBefore.value = nextValue),
-    after: (nextValue) => (selectedAfter.value = nextValue),
-    class: (nextValue) => (selectedClass.value = nextValue),
-    curator: (nextValue) => (selectedCurator.value = nextValue),
-  }
-
-  setters[name]?.(value)
+function toggleComparisonMenu(orderId: number) {
   openedSelect.value = null
+  openedComparisonMenu.value = openedComparisonMenu.value === orderId ? null : orderId
 }
 
 function selectSystemType(type: (typeof systemTypes)[number]) {
   selectedSystemType.value = type
 }
 
-function openSystemHistory(system: (typeof systemRows)[number]) {
-  selectedHistorySystem.value = system
+function openSystemHistory(system: { name?: string; systemName?: string }) {
+  selectedHistorySystem.value = { name: system.name ?? system.systemName ?? '' }
   isHistoryOpen.value = false
 }
 
@@ -256,10 +789,15 @@ function classModifier(value: string) {
 function pageTitle() {
   return navItems.find((item) => item.key === activePage.value)?.label ?? ''
 }
+
+onMounted(async () => {
+  await loadOrders()
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog()])
+})
 </script>
 
 <template>
-  <div class="app" @click="openedSelect = null">
+  <div class="app" @click="openedSelect = null; openedComparisonMenu = null">
     <header class="site-header">
       <div class="header-container">
         <div class="main-header__inner">
@@ -290,20 +828,20 @@ function pageTitle() {
             <span>Распоряжение</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'order' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('order')">
-                <span>{{ selectedOrder }}</span>
+                <span>{{ selectedOrderName() }}</span>
                 <i aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'order'" class="custom-select__menu">
                   <button
                     v-for="order in orders"
-                    :key="order"
+                    :key="order.id"
                     class="custom-select__option"
-                    :class="{ 'is-selected': order === selectedOrder }"
+                    :class="{ 'is-selected': order.id === selectedOrderId }"
                     type="button"
-                    @click="selectValue('order', order)"
+                    @click="selectOrder(order)"
                   >
-                    {{ order }}
+                    {{ order.name }}
                   </button>
                 </div>
               </Transition>
@@ -314,23 +852,23 @@ function pageTitle() {
         <section class="summary-grid" aria-label="Сводка изменений">
           <article class="summary-card">
             <span>Добавлено</span>
-            <strong>30 систем</strong>
+            <strong>{{ classificationStats.addedSystems }} систем</strong>
           </article>
 
           <div class="status-stack">
             <article class="status-card status-card--recommended">
-              <strong>20</strong>
+              <strong>{{ classificationStats.recommended }}</strong>
               <span>Рекомендованных</span>
             </article>
             <article class="status-card status-card--allowed">
-              <strong>10</strong>
+              <strong>{{ classificationStats.allowed }}</strong>
               <span>Разрешенных</span>
             </article>
           </div>
 
           <article class="summary-card">
             <span>Изм. классификация</span>
-            <strong>6 систем</strong>
+            <strong>{{ classificationStats.classificationChanges }} систем</strong>
           </article>
         </section>
 
@@ -354,18 +892,18 @@ function pageTitle() {
             <span>Было</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'before' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('before')">
-                <span>{{ selectedBefore }}</span>
+                <span>{{ selectedBeforeFilter }}</span>
                 <i aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'before'" class="custom-select__menu">
                   <button
-                    v-for="option in classOptions"
+                    v-for="option in beforeOptions"
                     :key="option"
                     class="custom-select__option"
-                    :class="{ 'is-selected': option === selectedBefore }"
+                    :class="{ 'is-selected': option === selectedBeforeFilter }"
                     type="button"
-                    @click="selectValue('before', option)"
+                    @click="selectedBeforeFilter = option; openedSelect = null; loadClassificationChanges()"
                   >
                     {{ option }}
                   </button>
@@ -377,18 +915,18 @@ function pageTitle() {
             <span>Стало</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'after' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('after')">
-                <span>{{ selectedAfter }}</span>
+                <span>{{ selectedAfterFilter }}</span>
                 <i aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'after'" class="custom-select__menu">
                   <button
-                    v-for="option in classOptions"
+                    v-for="option in afterOptions"
                     :key="option"
                     class="custom-select__option"
-                    :class="{ 'is-selected': option === selectedAfter }"
+                    :class="{ 'is-selected': option === selectedAfterFilter }"
                     type="button"
-                    @click="selectValue('after', option)"
+                    @click="selectedAfterFilter = option; openedSelect = null; loadClassificationChanges()"
                   >
                     {{ option }}
                   </button>
@@ -396,8 +934,11 @@ function pageTitle() {
               </Transition>
             </div>
           </div>
-          <button class="export-button" type="button">Экспортировать таблицу</button>
+          <button class="export-button" type="button" @click="exportClassificationTable">Экспортировать таблицу</button>
         </section>
+
+        <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
+        <p v-else-if="isClassificationLoading" class="table-message">Загрузка таблицы...</p>
 
         <div class="systems-table">
           <table>
@@ -412,13 +953,21 @@ function pageTitle() {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in changesRows" :key="`${row.name}-${row.before}-${row.after}`">
-                <td>{{ row.name }}</td>
-                <td :class="classModifier(row.before) && `status-cell status-cell--${classModifier(row.before)}`">
-                  {{ row.before }}
+              <tr v-if="currentClassificationRows().length === 0">
+                <td class="empty-table-cell" colspan="3">В этом распоряжении пока нет данных таблицы 1</td>
+              </tr>
+              <tr v-for="row in currentClassificationRows()" :key="row.id">
+                <td>
+                  <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
+                    {{ row.systemName }}
+                  </a>
+                  <span v-else>{{ row.systemName }}</span>
                 </td>
-                <td :class="classModifier(row.after) && `status-cell status-cell--${classModifier(row.after)}`">
-                  {{ row.after }}
+                <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
+                  {{ row.classBefore }}
+                </td>
+                <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
+                  {{ row.classAfter }}
                 </td>
               </tr>
             </tbody>
@@ -434,20 +983,20 @@ function pageTitle() {
             <span>Распоряжение</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'order' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('order')">
-                <span>{{ selectedOrder }}</span>
+                <span>{{ selectedOrderName() }}</span>
                 <i aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'order'" class="custom-select__menu">
                   <button
                     v-for="order in orders"
-                    :key="order"
+                    :key="order.id"
                     class="custom-select__option"
-                    :class="{ 'is-selected': order === selectedOrder }"
+                    :class="{ 'is-selected': order.id === selectedOrderId }"
                     type="button"
-                    @click="selectValue('order', order)"
+                    @click="selectOrder(order)"
                   >
-                    {{ order }}
+                    {{ order.name }}
                   </button>
                 </div>
               </Transition>
@@ -457,27 +1006,27 @@ function pageTitle() {
 
         <section class="systems-summary" aria-label="Сводка систем">
           <article class="summary-card">
-            <strong>300</strong>
+            <strong>{{ systemCatalogStats.total }}</strong>
             <span>систем</span>
           </article>
 
           <div class="status-stack">
             <article class="status-card status-card--recommended">
-              <strong>200</strong>
+              <strong>{{ systemCatalogStats.recommended }}</strong>
               <span>Рекомендованных</span>
             </article>
             <article class="status-card status-card--allowed">
-              <strong>80</strong>
+              <strong>{{ systemCatalogStats.allowed }}</strong>
               <span>Разрешенных</span>
             </article>
             <article class="status-card status-card--forbidden">
-              <strong>20</strong>
+              <strong>{{ systemCatalogStats.forbidden }}</strong>
               <span>Запрещенных</span>
             </article>
           </div>
 
           <article class="summary-card">
-            <strong>15</strong>
+            <strong>{{ systemCatalogStats.curators }}</strong>
             <span>кураторов</span>
           </article>
         </section>
@@ -540,18 +1089,18 @@ function pageTitle() {
             <span>Класс</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'class' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('class')">
-                <span>{{ selectedClass }}</span>
+                <span>{{ selectedSystemCatalogClass }}</span>
                 <i aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'class'" class="custom-select__menu">
                   <button
-                    v-for="option in classOptions"
+                    v-for="option in systemCatalogClassOptions"
                     :key="option"
                     class="custom-select__option"
-                    :class="{ 'is-selected': option === selectedClass }"
+                    :class="{ 'is-selected': option === selectedSystemCatalogClass }"
                     type="button"
-                    @click="selectValue('class', option)"
+                    @click="selectedSystemCatalogClass = option; openedSelect = null; loadSystemCatalog()"
                   >
                     {{ option }}
                   </button>
@@ -564,18 +1113,18 @@ function pageTitle() {
             <span>Куратор</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'curator' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('curator')">
-                <span>{{ selectedCurator }}</span>
+                <span>{{ selectedSystemCatalogCurator }}</span>
                 <i aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'curator'" class="custom-select__menu">
                   <button
-                    v-for="option in curatorOptions"
+                    v-for="option in systemCatalogCuratorOptions"
                     :key="option"
                     class="custom-select__option"
-                    :class="{ 'is-selected': option === selectedCurator }"
+                    :class="{ 'is-selected': option === selectedSystemCatalogCurator }"
                     type="button"
-                    @click="selectValue('curator', option)"
+                    @click="selectedSystemCatalogCurator = option; openedSelect = null; loadSystemCatalog()"
                   >
                     {{ option }}
                   </button>
@@ -584,8 +1133,11 @@ function pageTitle() {
             </div>
           </div>
 
-          <button class="export-button" type="button">Экспортировать таблицу</button>
+          <button class="export-button" type="button" @click="exportSystemCatalog">Экспортировать таблицу</button>
         </section>
+
+        <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
+        <p v-else-if="isSystemCatalogLoading" class="table-message">Загрузка таблицы...</p>
 
         <div class="systems-table systems-table--scroll">
           <table>
@@ -599,9 +1151,17 @@ function pageTitle() {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in systemRows" :key="row.code">
+              <tr v-if="currentSystemCatalogRows().length === 0">
+                <td class="empty-table-cell" colspan="5">В этом распоряжении пока нет данных таблицы 2</td>
+              </tr>
+              <tr v-for="row in currentSystemCatalogRows()" :key="row.id">
                 <td>{{ row.code }}</td>
-                <td>{{ row.name }}</td>
+                <td>
+                  <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
+                    {{ row.systemName }}
+                  </a>
+                  <span v-else>{{ row.systemName }}</span>
+                </td>
                 <td :class="`status-cell status-cell--${classModifier(row.systemClass)}`">
                   <span>{{ row.systemClass }}</span>
                   <button class="status-cell__icon" type="button" @click.stop="openSystemHistory(row)">
@@ -610,8 +1170,8 @@ function pageTitle() {
                 </td>
                 <td>{{ row.curator }}</td>
                 <td>
-                  <span class="compare-mark" :class="{ 'is-checked': row.compared }">
-                    {{ row.compared ? '✓' : '' }}
+                  <span class="compare-mark" :class="{ 'is-checked': row.position % 3 === 0 }">
+                    {{ row.position % 3 === 0 ? '✓' : '' }}
                   </span>
                 </td>
               </tr>
@@ -627,20 +1187,20 @@ function pageTitle() {
             <span>Распоряжение</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'order' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('order')">
-                <span>{{ selectedOrder }}</span>
+                <span>{{ selectedOrderName() }}</span>
                 <i aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'order'" class="custom-select__menu">
                   <button
                     v-for="order in orders"
-                    :key="order"
+                    :key="order.id"
                     class="custom-select__option"
-                    :class="{ 'is-selected': order === selectedOrder }"
+                    :class="{ 'is-selected': order.id === selectedOrderId }"
                     type="button"
-                    @click="selectValue('order', order)"
+                    @click="selectOrder(order)"
                   >
-                    {{ order }}
+                    {{ order.name }}
                   </button>
                 </div>
               </Transition>
@@ -751,58 +1311,109 @@ function pageTitle() {
 
           <div class="comparison-controls__row">
             <div
-              v-for="(order, index) in comparisonOrders"
-              :key="order"
+              v-for="(orderId, index) in comparisonOrderIds"
+              :key="orderId"
               class="custom-select comparison-order"
               :class="{ 'is-open': openedSelect === `comparison-${index}` }"
             >
-              <button class="custom-select__button" type="button" @click.stop="toggleSelect(`comparison-${index}`)">
-                <span>{{ order }}</span>
-                <i aria-hidden="true" />
-              </button>
+              <div class="comparison-order__control">
+                <button class="custom-select__button" type="button" @click.stop="toggleSelect(`comparison-${index}`)">
+                  <span>{{ comparisonOrderName(orderId) }}</span>
+                </button>
+                <button
+                  class="comparison-order__more"
+                  type="button"
+                  aria-label="Открыть действия"
+                  @click.stop="toggleComparisonMenu(orderId)"
+                >
+                  <span aria-hidden="true">•••</span>
+                </button>
+              </div>
+              <Transition name="select-menu">
+                <div v-if="openedComparisonMenu === orderId" class="comparison-action-menu">
+                  <button type="button" @click="removeComparisonOrder(orderId)">
+                    <img :src="trashIcon" alt="" aria-hidden="true" />
+                    <span>Удалить</span>
+                  </button>
+                </div>
+              </Transition>
               <Transition name="select-menu">
                 <div v-if="openedSelect === `comparison-${index}`" class="custom-select__menu">
                   <button
-                    v-for="option in orders"
-                    :key="option"
+                    v-for="option in comparisonOrderOptions(orderId)"
+                    :key="option.id"
                     class="custom-select__option"
-                    :class="{ 'is-selected': option === order }"
+                    :class="{ 'is-selected': option.id === orderId }"
                     type="button"
-                    @click="openedSelect = null"
+                    @click="selectComparisonOrder(index, option)"
                   >
-                    {{ option }}
+                    {{ option.name }}
                   </button>
                 </div>
               </Transition>
             </div>
 
-            <button class="comparison-add-button" type="button" aria-label="Добавить распоряжение">+</button>
+            <div
+              v-if="comparisonOrderIds.length < orders.length"
+              class="custom-select comparison-add-select"
+              :class="{ 'is-open': openedSelect === 'comparison-add' }"
+            >
+              <button
+                class="comparison-add-button"
+                type="button"
+                aria-label="Добавить распоряжение"
+                @click.stop="toggleSelect('comparison-add')"
+              >
+                +
+              </button>
+              <Transition name="select-menu">
+                <div v-if="openedSelect === 'comparison-add'" class="custom-select__menu comparison-add-menu">
+                  <button
+                    v-for="order in availableComparisonOrders()"
+                    :key="order.id"
+                    class="custom-select__option"
+                    type="button"
+                    @click="addComparisonOrder(order)"
+                  >
+                    {{ order.name }}
+                  </button>
+                </div>
+              </Transition>
+            </div>
           </div>
         </div>
+
+        <p v-if="comparisonError" class="table-message table-message--error">{{ comparisonError }}</p>
+        <p v-else-if="isComparisonLoading" class="table-message">Загрузка сравнения...</p>
 
         <div class="systems-table comparison-table">
           <table>
             <thead>
               <tr>
                 <th>Название системы</th>
-                <th v-for="order in comparisonOrders" :key="order">
-                  {{ order.replace('№ ', '№\u00A0').replace(' от ', ' от\n') }}
+                <th v-for="orderId in comparisonOrderIds" :key="orderId">
+                  {{ comparisonOrderName(orderId).replace('№ ', '№\u00A0').replace(' от ', ' от\n') }}
                 </th>
                 <th>Удалить из сравнения</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in comparisonRows" :key="`${row.name}-${row.values.join('-')}`">
+              <tr v-if="comparisonRows().length === 0">
+                <td class="empty-table-cell" :colspan="comparisonOrderIds.length + 2">
+                  В выбранных распоряжениях пока нет данных таблицы 2
+                </td>
+              </tr>
+              <tr v-for="row in comparisonRows()" :key="row.key">
                 <td>{{ row.name }}</td>
                 <td
-                  v-for="value in row.values"
-                  :key="value"
-                  :class="classModifier(value) && `status-cell status-cell--${classModifier(value)}`"
+                  v-for="(_, index) in comparisonOrderIds"
+                  :key="`${row.name}-${index}`"
+                  :class="classModifier(comparisonValue(row, index)) && `status-cell status-cell--${classModifier(comparisonValue(row, index))}`"
                 >
-                  {{ value }}
+                  {{ comparisonValue(row, index) }}
                 </td>
                 <td>
-                  <button class="comparison-delete-button" type="button" aria-label="Удалить из сравнения">
+                  <button class="comparison-delete-button" type="button" aria-label="Удалить из сравнения" @click="hideComparisonRow(row)">
                     <img :src="trashIcon" alt="" aria-hidden="true" />
                   </button>
                 </td>
@@ -837,12 +1448,22 @@ function pageTitle() {
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="order in databaseOrders" :key="order.name">
-                  <td>{{ order.name }}</td>
-                  <td>{{ order.createdAt }}</td>
-                  <td>{{ order.updatedAt }}</td>
+                <tr v-for="order in orders" :key="order.id">
                   <td>
-                    <button class="icon-action-button" type="button" aria-label="Удалить БД">
+                    <input
+                      v-model="order.name"
+                      class="order-name-input"
+                      type="text"
+                      aria-label="Название распоряжения"
+                      @input="scheduleOrderRename(order)"
+                      @blur="saveOrderName(order)"
+                      @keyup.enter="($event.target as HTMLInputElement).blur()"
+                    />
+                  </td>
+                  <td>{{ formatOrderDate(order.createdAt) }}</td>
+                  <td>{{ formatOrderDate(order.updatedAt) }}</td>
+                  <td>
+                    <button class="icon-action-button" type="button" aria-label="Удалить БД" @click="deleteOrder(order)">
                       <img :src="trashIcon" alt="" aria-hidden="true" />
                     </button>
                   </td>
@@ -853,8 +1474,10 @@ function pageTitle() {
 
           <div class="create-order-line">
             <span>Создать новую БД распоряжений</span>
-            <button class="small-red-button" type="button">+</button>
+            <button class="small-red-button" type="button" @click="createOrder">+</button>
           </div>
+          <p v-if="ordersError" class="table-message table-message--error">{{ ordersError }}</p>
+          <p v-else-if="isOrdersLoading" class="table-message">Загрузка распоряжений...</p>
         </section>
 
         <section class="settings-section" aria-labelledby="edit-db-title">
@@ -866,20 +1489,20 @@ function pageTitle() {
             <span>Выбрать БД распоряжения для редактирования</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'settings-order' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('settings-order')">
-                <span>{{ selectedOrder }}</span>
+                <span>{{ selectedOrderName() }}</span>
                 <i aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'settings-order'" class="custom-select__menu">
                   <button
                     v-for="order in orders"
-                    :key="order"
+                    :key="order.id"
                     class="custom-select__option"
-                    :class="{ 'is-selected': order === selectedOrder }"
+                    :class="{ 'is-selected': order.id === selectedOrderId }"
                     type="button"
-                    @click="selectValue('order', order)"
+                    @click="selectOrder(order)"
                   >
-                    {{ order }}
+                    {{ order.name }}
                   </button>
                 </div>
               </Transition>
@@ -890,10 +1513,26 @@ function pageTitle() {
             <div class="settings-table-toolbar">
               <span>Таблица 1</span>
               <label class="settings-search">
-                <input type="search" placeholder="Поиск по названию или ЕКН" />
+                <input
+                  v-model="tableSearch"
+                  type="search"
+                  placeholder="Поиск по названию или ЕКН"
+                  @keyup.enter="loadClassificationChanges"
+                />
               </label>
-              <button class="import-button" type="button">Импортировать таблицу</button>
+              <button class="import-button" type="button" :disabled="isClassificationLoading" @click="openTableImport">
+                {{ isClassificationLoading ? 'Импорт...' : 'Импортировать таблицу' }}
+              </button>
+              <input
+                ref="importFileInput"
+                class="visually-hidden-input"
+                type="file"
+                accept=".xlsx"
+                @change="importTableFile"
+              />
             </div>
+
+            <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
 
             <div class="systems-table settings-data-table">
               <table>
@@ -908,13 +1547,21 @@ function pageTitle() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in changesRows" :key="`settings-${row.name}-${row.before}-${row.after}`">
-                    <td>{{ row.name }}</td>
-                    <td :class="classModifier(row.before) && `status-cell status-cell--${classModifier(row.before)}`">
-                      {{ row.before }}
+                  <tr v-if="currentClassificationRows().length === 0">
+                    <td class="empty-table-cell" colspan="3">В этом распоряжении пока нет данных таблицы 1</td>
+                  </tr>
+                  <tr v-for="row in currentClassificationRows()" :key="`settings-${row.id}`">
+                    <td>
+                      <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
+                        {{ row.systemName }}
+                      </a>
+                      <span v-else>{{ row.systemName }}</span>
                     </td>
-                    <td :class="classModifier(row.after) && `status-cell status-cell--${classModifier(row.after)}`">
-                      {{ row.after }}
+                    <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
+                      {{ row.classBefore }}
+                    </td>
+                    <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
+                      {{ row.classAfter }}
                     </td>
                   </tr>
                 </tbody>
@@ -926,10 +1573,26 @@ function pageTitle() {
             <div class="settings-table-toolbar">
               <span>Таблица 2</span>
               <label class="settings-search">
-                <input type="search" placeholder="Поиск по названию или ЕКН" />
+                <input
+                  v-model="systemCatalogSearch"
+                  type="search"
+                  placeholder="Поиск по названию или ЕКН"
+                  @keyup.enter="loadSystemCatalog"
+                />
               </label>
-              <button class="import-button" type="button">Импортировать таблицу</button>
+              <button class="import-button" type="button" :disabled="isSystemCatalogLoading" @click="openSystemCatalogImport">
+                {{ isSystemCatalogLoading ? 'Импорт...' : 'Импортировать таблицу' }}
+              </button>
+              <input
+                ref="systemCatalogFileInput"
+                class="visually-hidden-input"
+                type="file"
+                accept=".xlsx"
+                @change="importSystemCatalogFile"
+              />
             </div>
+
+            <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
 
             <div class="systems-table settings-data-table">
               <table>
@@ -942,9 +1605,17 @@ function pageTitle() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in systemRows.slice(0, 4)" :key="`settings-system-${row.code}`">
+                  <tr v-if="currentSystemCatalogRows().length === 0">
+                    <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 2</td>
+                  </tr>
+                  <tr v-for="row in currentSystemCatalogRows()" :key="`settings-system-${row.id}`">
                     <td>{{ row.code }}</td>
-                    <td>{{ row.name }}</td>
+                    <td>
+                      <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
+                        {{ row.systemName }}
+                      </a>
+                      <span v-else>{{ row.systemName }}</span>
+                    </td>
                     <td :class="`status-cell status-cell--${classModifier(row.systemClass)}`">
                       {{ row.systemClass }}
                     </td>
