@@ -110,7 +110,157 @@ func (r *SystemCatalogRepository) List(ctx context.Context, filter model.SystemC
 		return nil, fmt.Errorf("iterate system catalog: %w", err)
 	}
 
+	if err := r.loadCharacteristics(ctx, rows); err != nil {
+		return nil, err
+	}
+
 	return rows, nil
+}
+
+func (r *SystemCatalogRepository) ParserRows(ctx context.Context, orderID int64) ([]model.SystemCatalogRow, error) {
+	result, err := r.db.QueryContext(ctx, `
+		SELECT id, order_id, position, code, system_name, system_url, system_class, curator, imported_at
+		FROM system_catalog
+		WHERE order_id = $1
+		ORDER BY position, id
+	`, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("list system catalog rows for parser: %w", err)
+	}
+	defer result.Close()
+
+	rows := make([]model.SystemCatalogRow, 0)
+	for result.Next() {
+		var row model.SystemCatalogRow
+		if err := result.Scan(&row.ID, &row.OrderID, &row.Position, &row.Code, &row.SystemName, &row.SystemURL, &row.SystemClass, &row.Curator, &row.ImportedAt); err != nil {
+			return nil, fmt.Errorf("scan parser row: %w", err)
+		}
+		rows = append(rows, row)
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("iterate parser rows: %w", err)
+	}
+
+	return rows, nil
+}
+
+func (r *SystemCatalogRepository) SaveParsed(ctx context.Context, systemID int64, systemURL string, characteristics []model.SystemCharacteristic) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin save parsed system: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `UPDATE system_catalog SET system_url = $2 WHERE id = $1`, systemID, systemURL); err != nil {
+		return fmt.Errorf("update parsed system url: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM system_characteristics WHERE system_catalog_id = $1`, systemID); err != nil {
+		return fmt.Errorf("clear parsed characteristics: %w", err)
+	}
+
+	for _, characteristic := range characteristics {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO system_characteristics (system_catalog_id, position, name, value)
+			VALUES ($1, $2, $3, $4)
+		`, systemID, characteristic.Position, characteristic.Name, characteristic.Value); err != nil {
+			return fmt.Errorf("insert parsed characteristic: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit parsed system: %w", err)
+	}
+	return nil
+}
+
+func (r *SystemCatalogRepository) ReplaceSystemTypes(ctx context.Context, systemTypes []model.SystemTypeOption) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin replace nav system types: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM nav_system_types`); err != nil {
+		return fmt.Errorf("clear nav system types: %w", err)
+	}
+	for _, systemType := range systemTypes {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO nav_system_types (slug, name, position)
+			VALUES ($1, $2, $3)
+		`, systemType.Slug, systemType.Name, systemType.Position); err != nil {
+			return fmt.Errorf("insert nav system type: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit nav system types: %w", err)
+	}
+	return nil
+}
+
+func (r *SystemCatalogRepository) SystemTypes(ctx context.Context) ([]model.SystemTypeOption, error) {
+	result, err := r.db.QueryContext(ctx, `
+		SELECT slug, name, position
+		FROM nav_system_types
+		ORDER BY position, name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list nav system types: %w", err)
+	}
+	defer result.Close()
+
+	systemTypes := make([]model.SystemTypeOption, 0)
+	for result.Next() {
+		var systemType model.SystemTypeOption
+		if err := result.Scan(&systemType.Slug, &systemType.Name, &systemType.Position); err != nil {
+			return nil, fmt.Errorf("scan nav system type: %w", err)
+		}
+		systemTypes = append(systemTypes, systemType)
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("iterate nav system types: %w", err)
+	}
+	return systemTypes, nil
+}
+
+func (r *SystemCatalogRepository) loadCharacteristics(ctx context.Context, rows []model.SystemCatalogRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	byID := make(map[int64]*model.SystemCatalogRow, len(rows))
+	ids := make([]any, 0, len(rows))
+	placeholders := make([]string, 0, len(rows))
+	for index := range rows {
+		byID[rows[index].ID] = &rows[index]
+		ids = append(ids, rows[index].ID)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", index+1))
+	}
+
+	result, err := r.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT system_catalog_id, position, name, value
+		FROM system_characteristics
+		WHERE system_catalog_id IN (%s)
+		ORDER BY system_catalog_id, position, id
+	`, strings.Join(placeholders, ",")), ids...)
+	if err != nil {
+		return fmt.Errorf("load system characteristics: %w", err)
+	}
+	defer result.Close()
+
+	for result.Next() {
+		var systemID int64
+		var characteristic model.SystemCharacteristic
+		if err := result.Scan(&systemID, &characteristic.Position, &characteristic.Name, &characteristic.Value); err != nil {
+			return fmt.Errorf("scan system characteristic: %w", err)
+		}
+		if row := byID[systemID]; row != nil {
+			row.Characteristics = append(row.Characteristics, characteristic)
+		}
+	}
+	if err := result.Err(); err != nil {
+		return fmt.Errorf("iterate system characteristics: %w", err)
+	}
+	return nil
 }
 
 func (r *SystemCatalogRepository) Stats(ctx context.Context, orderID int64) (model.SystemCatalogStats, error) {

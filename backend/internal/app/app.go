@@ -36,12 +36,13 @@ func Run(cfg config.Config) error {
 	classificationService := service.NewClassificationService(classificationRepo)
 	systemCatalogRepo := repository.NewSystemCatalogRepository(database)
 	systemCatalogService := service.NewSystemCatalogService(systemCatalogRepo)
+	navParserService := service.NewNavParserService(systemCatalogRepo)
 	orderRepo := repository.NewOrderRepository(database)
 	orderService := service.NewOrderService(orderRepo)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpdelivery.NewRouter(classificationService, systemCatalogService, orderService),
+		Handler:           httpdelivery.NewRouter(classificationService, systemCatalogService, orderService, navParserService),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
