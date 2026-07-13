@@ -40,12 +40,17 @@ func (s *SystemCatalogService) List(ctx context.Context, filter model.SystemCata
 	if err != nil {
 		return model.SystemCatalogList{}, err
 	}
+	systemTypes, err := s.repo.SystemTypes(ctx)
+	if err != nil {
+		return model.SystemCatalogList{}, err
+	}
 
 	return model.SystemCatalogList{
 		Rows:           rows,
 		Stats:          stats,
 		ClassOptions:   classOptions,
 		CuratorOptions: curatorOptions,
+		SystemTypes:    systemTypes,
 	}, nil
 }
 

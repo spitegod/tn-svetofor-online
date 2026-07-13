@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import logo from '@/shared/assets/logo.png'
 import folderIcon from '@/shared/assets/folder.png'
 import openIcon from '@/shared/assets/open.png'
@@ -42,6 +42,21 @@ type SystemCatalogRow = {
   systemClass: string
   curator: string
   importedAt: string
+  characteristics: SystemCharacteristic[]
+}
+
+type SystemCharacteristic = {
+  position: number
+  name: string
+  value: string
+}
+
+type NavParseReport = {
+  total: number
+  found: number
+  updated: number
+  failed: number
+  notFound: string[]
 }
 
 type SystemCatalogStats = {
@@ -57,6 +72,13 @@ type SystemCatalogResponse = {
   stats: SystemCatalogStats
   classOptions: string[]
   curatorOptions: string[]
+  systemTypes: SystemTypeOption[]
+}
+
+type SystemTypeOption = {
+  slug: string
+  name: string
+  position: number
 }
 
 type Order = {
@@ -91,119 +113,10 @@ const constructionTypes = [
   'Транспортное и дорожное строительство',
   'Специальные сооружения',
 ]
-
-const systemTypes = [
-  { name: 'Все системы', count: 447 },
-  { name: 'Плоская крыша', count: 108 },
-  { name: 'Крыша стилобата', count: 12 },
-  { name: 'Скатная крыша', count: 8 },
-  { name: 'Фасад', count: 18 },
-  { name: 'Цоколь', count: 5 },
-  { name: 'Потолок', count: 1 },
-  { name: 'Отмостка', count: 6 },
-  { name: 'Полы и перекрытия', count: 43 },
-  { name: 'Стены и перегородки', count: 10 },
-  { name: 'Звукоизоляция', count: 13 },
-  { name: 'Фундамент', count: 62 },
-  { name: 'Огнезащита', count: 7 },
-  { name: 'Лакокрасочные покрытия', count: 5 },
-  { name: 'Подпорные сооружения', count: 2 },
-  { name: 'Техническая изоляция', count: 15 },
-  { name: 'Емкость, резервуар', count: 9 },
-  { name: 'Благоустройство территорий', count: 2 },
-  { name: 'Решения для нефтегазового комплекса', count: 7 },
-  { name: 'Решения для сельскохозяйственного комплекса', count: 2 },
-  { name: 'Решения для природоохранных сооружений', count: 4 },
-  { name: 'Решения для гидротехнического строительства', count: 4 },
-  { name: 'Решения для горнодобывающей промышленности', count: 5 },
-  { name: 'Тоннель', count: 7 },
-  { name: 'Дорога', count: 7 },
-  { name: 'Мост', count: 5 },
-  { name: 'Искусственные водоемы, пруды и пр.', count: 7 },
-  { name: 'Полигоны, площадки хранения и пр.', count: 5 },
-  { name: 'Автомобильный транспорт', count: 26 },
-  { name: 'Железнодорожный транспорт', count: 20 },
-  { name: 'Грунтовые плотины и дамбы', count: 2 },
-  { name: 'Конструкция летного поля', count: 5 },
-  { name: 'Комплексные решения', count: 3 },
-]
+const selectedConstructionType = ref(constructionTypes[1])
 
 const classOptions = ['Рекомендованная', 'Разрешенная', 'Запрещенная']
 const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'Уртенков А.', 'Золотарев М.', 'Кузнецова Н.']
-
-const systemNames = [
-  'ТН-СТИЛОБАТ КЛАССИК АВТО',
-  'ТН-СТИЛОБАТ КЛАССИК ТРОТУАР',
-  'ТН-КРОВЛЯ Гарант',
-  'ТН-КРОВЛЯ Смарт PIR',
-  'ТН-КРОВЛЯ Классик',
-  'ТН-ФАСАД Комби',
-  'ТН-ФАСАД Профи',
-  'ТН-ЦОКОЛЬ Эксперт',
-  'ТН-ПОЛ Акустик',
-  'ТН-ПОЛ Проф',
-  'ТН-СТЕНА Стандарт',
-  'ТН-СТЕНА Проф',
-  'ТН-ФУНДАМЕНТ Термо',
-  'ТН-ФУНДАМЕНТ Термо Проф',
-  'ТН-ОГНЕЗАЩИТА Конструктив',
-  'ТН-ТЕХИЗОЛЯЦИЯ Трубопровод',
-  'ТН-РЕЗЕРВУАР Стандарт',
-  'ТН-БЛАГОУСТРОЙСТВО Пешеход',
-  'ТН-АВТОДОРОГА Стандарт',
-  'ТН-АВТОДОРОГА Проф',
-  'ТН-ЖД Платформа',
-  'ТН-МОСТ Гидро',
-  'ТН-ТОННЕЛЬ Проф',
-  'ТН-ДОРОГА Дренаж',
-  'ТН-ЛЕТНОЕ ПОЛЕ',
-  'ТН-ОТМОСТКА Термо',
-  'ТН-СКАТНАЯ КРЫША Мансарда',
-  'ТН-КРОВЛЯ Экспресс',
-  'ТН-ЗВУКОИЗОЛЯЦИЯ Акустик',
-  'ТН-ПЕРЕГОРОДКА Лайт',
-  'ТН-ПЛОСКАЯ КРЫША Балласт',
-  'ТН-КРОВЛЯ Инверс',
-  'ТН-ФАСАД Лайт',
-  'ТН-ЦОКОЛЬ Комфорт',
-  'ТН-ПОЛ Балкон',
-  'ТН-ФУНДАМЕНТ Универсал',
-  'ТН-ПОДПОРНАЯ СТЕНА',
-  'ТН-ПРУД Гео',
-  'ТН-ПОЛИГОН Защита',
-  'ТН-ПОЛИГОН Защита Проф',
-]
-
-const systemRows = systemNames.map((name, index) => ({
-  code: `ПК-${String(10000001 + index)}`,
-  name,
-  systemClass: classOptions[index % classOptions.length],
-  curator: curatorOptions[(index % (curatorOptions.length - 1)) + 1],
-  compared: index % 3 === 0,
-}))
-
-const classificationFilterGroups = [
-  'Рекомендации ТЕХНОНИКОЛЬ',
-  'Тип несущего основания системы',
-  'Тип кровли по расположению слоев',
-  'Тип крыши по степени эксплуатации',
-  'Допустимая интенсивность эксплуатационной нагрузки согласно СП17.13330.2017',
-  'Наличие теплоизоляционного слоя',
-  'Тип теплоизоляции',
-  'Метод крепления теплоизоляционного слоя',
-  'Тип гидроизоляции',
-]
-
-const classificationSystems = systemRows.slice(0, 15).map((row, index) => ({
-  ...row,
-  systemClass:
-    index < 9
-      ? 'Рекомендованная'
-      : index < 12
-        ? 'Разрешенная'
-        : 'Запрещенная',
-  base: index % 2 === 0 ? 'ПВХ-мембрана' : 'Плоских И.',
-}))
 
 const documentRows = Array.from({ length: 4 }, (_, index) => ({
   id: index + 1,
@@ -223,12 +136,14 @@ const comparisonError = ref('')
 const isOrdersLoading = ref(false)
 const ordersError = ref('')
 const orderRenameTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
-const selectedSystemType = ref(systemTypes[0])
+const selectedSystemTypeSlug = ref('')
 const isSystemTypesOpen = ref(false)
 const selectedHistorySystem = ref<{ name: string } | null>(null)
 const isHistoryOpen = ref(false)
 const openedSelect = ref<string | null>(null)
 const openedComparisonMenu = ref<number | null>(null)
+const draggedComparisonOrderId = ref<number | null>(null)
+const comparisonDropIndex = ref<number | null>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)
 const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
@@ -246,6 +161,62 @@ const tableSearch = ref('')
 const isClassificationLoading = ref(false)
 const classificationError = ref('')
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
+const classificationCatalogRows = ref<SystemCatalogRow[]>([])
+const classificationCatalogSearch = ref('')
+const isClassificationCatalogLoading = ref(false)
+const classificationCatalogError = ref('')
+const parsedSystemTypes = ref<SystemTypeOption[]>([])
+const openedClassificationSystemId = ref<number | null>(null)
+const classificationCardColumns = ref(3)
+const openedClassificationFilter = ref<string | null>(null)
+const selectedClassificationFilters = ref<Record<string, string>>({})
+const systemTypes = computed(() => [{ slug: '', name: 'Все системы', position: 0 }, ...parsedSystemTypes.value].map((type) => ({
+  ...type,
+  count: classificationCatalogRows.value.filter((system) =>
+    matchesConstructionType(system) && matchesSystemType(system, type),
+  ).length,
+})))
+const selectedSystemType = computed(() =>
+  systemTypes.value.find((type) => type.slug === selectedSystemTypeSlug.value) ?? systemTypes.value[0],
+)
+const classificationBaseSystems = computed(() => classificationCatalogRows.value.filter((system) =>
+  matchesConstructionType(system) && matchesSystemType(system, selectedSystemType.value),
+))
+const classificationFilterGroups = computed(() => {
+  const names = new Set<string>()
+  for (const system of classificationBaseSystems.value) {
+    for (const characteristic of system.characteristics ?? []) {
+      if (characteristic.name !== 'Тип системы' && characteristic.name !== 'Сегмент строительства' && characteristic.value) {
+        names.add(characteristic.name)
+      }
+    }
+  }
+  return [...names]
+})
+const selectedClassificationFilterCount = computed(() => Object.keys(selectedClassificationFilters.value).length)
+const classificationSystems = computed(() => {
+  const query = classificationCatalogSearch.value.trim().toLocaleLowerCase('ru-RU')
+  const selectedFilters = Object.entries(selectedClassificationFilters.value)
+  return classificationBaseSystems.value.filter((system) => {
+    const matchesSearch = !query ||
+      system.systemName.toLocaleLowerCase('ru-RU').includes(query) ||
+      system.code.toLocaleLowerCase('ru-RU').includes(query)
+    const matchesFilters = selectedFilters.every(([name, value]) =>
+      system.characteristics?.some((characteristic) => characteristic.name === name && characteristic.value === value),
+    )
+    return matchesSearch && matchesFilters
+  })
+})
+const classificationSystemRows = computed(() => {
+  const rows: SystemCatalogRow[][] = []
+  for (let index = 0; index < classificationSystems.value.length; index += classificationCardColumns.value) {
+    rows.push(classificationSystems.value.slice(index, index + classificationCardColumns.value))
+  }
+  return rows
+})
+const openedClassificationSystem = computed(() =>
+  classificationSystems.value.find((system) => system.id === openedClassificationSystemId.value) ?? null,
+)
 const systemCatalogStats = ref<SystemCatalogStats>({
   total: 0,
   recommended: 0,
@@ -260,6 +231,10 @@ const selectedSystemCatalogClass = ref('Все')
 const selectedSystemCatalogCurator = ref('Все кураторы')
 const isSystemCatalogLoading = ref(false)
 const systemCatalogError = ref('')
+const isNavParsing = ref(false)
+const navParseMessage = ref('')
+const navParseError = ref('')
+const navParseNotFound = ref<string[]>([])
 
 function selectedOrderName() {
   return orders.value.find((order) => order.id === selectedOrderId.value)?.name ?? 'Распоряжение не выбрано'
@@ -296,7 +271,7 @@ async function loadOrders() {
       selectedOrderId.value = orders.value[0].id
     }
     if (comparisonOrderIds.value.length === 0) {
-      comparisonOrderIds.value = orders.value.map((order) => order.id)
+      comparisonOrderIds.value = orders.value.slice(0, 2).map((order) => order.id)
     } else {
       comparisonOrderIds.value = comparisonOrderIds.value.filter((id) => orders.value.some((order) => order.id === id))
     }
@@ -311,7 +286,10 @@ async function loadOrders() {
 async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
   openedSelect.value = null
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog()])
+  classificationCatalogSearch.value = ''
+  selectedSystemTypeSlug.value = ''
+  clearClassificationFilters()
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog()])
 }
 
 function comparisonRowKey(row: Pick<SystemCatalogRow, 'code' | 'systemName'>) {
@@ -372,9 +350,7 @@ async function createOrder() {
   const order: Order = await response.json()
   orders.value = [order, ...orders.value]
   selectedOrderId.value = order.id
-  comparisonOrderIds.value = [order.id, ...comparisonOrderIds.value]
-  await loadComparisonCatalog(order.id)
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog()])
 }
 
 async function deleteOrder(order: Order) {
@@ -397,7 +373,7 @@ async function deleteOrder(order: Order) {
   const nextCatalogs = { ...comparisonCatalogByOrder.value }
   delete nextCatalogs[order.id]
   comparisonCatalogByOrder.value = nextCatalogs
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog()])
 }
 
 function scheduleOrderRename(order: Order) {
@@ -477,6 +453,46 @@ async function addComparisonOrder(order?: Order) {
 function removeComparisonOrder(orderId: number) {
   comparisonOrderIds.value = comparisonOrderIds.value.filter((id) => id !== orderId)
   openedComparisonMenu.value = null
+}
+
+function startComparisonOrderDrag(event: DragEvent, orderId: number) {
+  draggedComparisonOrderId.value = orderId
+  comparisonDropIndex.value = comparisonOrderIds.value.indexOf(orderId)
+  openedSelect.value = null
+  openedComparisonMenu.value = null
+
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(orderId))
+  }
+}
+
+function enterComparisonOrderDrop(index: number) {
+  if (draggedComparisonOrderId.value !== null) {
+    comparisonDropIndex.value = index
+  }
+}
+
+function dropComparisonOrder(targetIndex: number) {
+  const orderId = draggedComparisonOrderId.value
+  if (orderId === null) {
+    return
+  }
+
+  const sourceIndex = comparisonOrderIds.value.indexOf(orderId)
+  if (sourceIndex !== -1 && sourceIndex !== targetIndex) {
+    const reorderedIds = [...comparisonOrderIds.value]
+    reorderedIds.splice(sourceIndex, 1)
+    reorderedIds.splice(targetIndex, 0, orderId)
+    comparisonOrderIds.value = reorderedIds
+  }
+
+  endComparisonOrderDrag()
+}
+
+function endComparisonOrderDrag() {
+  draggedComparisonOrderId.value = null
+  comparisonDropIndex.value = null
 }
 
 function comparisonRows() {
@@ -650,6 +666,35 @@ function applySystemCatalogPayload(payload: SystemCatalogResponse) {
   systemCatalogClassOptions.value = payload.classOptions.length > 1 ? payload.classOptions : systemCatalogClassOptions.value
   systemCatalogCuratorOptions.value =
     payload.curatorOptions.length > 1 ? ['Все кураторы', ...payload.curatorOptions.filter((option) => option !== 'Все')] : systemCatalogCuratorOptions.value
+  parsedSystemTypes.value = payload.systemTypes ?? parsedSystemTypes.value
+  if (selectedSystemTypeSlug.value && !parsedSystemTypes.value.some((type) => type.slug === selectedSystemTypeSlug.value)) {
+    selectedSystemTypeSlug.value = ''
+  }
+}
+
+async function loadClassificationCatalog() {
+  isClassificationCatalogLoading.value = true
+  classificationCatalogError.value = ''
+
+  try {
+    const query = new URLSearchParams()
+    if (selectedOrderId.value) {
+      query.set('orderId', String(selectedOrderId.value))
+    }
+
+    const response = await fetch(`${API_BASE_URL}/system-catalog?${query.toString()}`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить системы из таблицы 2')
+    }
+
+    const payload: SystemCatalogResponse = await response.json()
+    classificationCatalogRows.value = payload.rows
+    parsedSystemTypes.value = payload.systemTypes ?? parsedSystemTypes.value
+  } catch (error) {
+    classificationCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить системы из таблицы 2'
+  } finally {
+    isClassificationCatalogLoading.value = false
+  }
 }
 
 async function loadSystemCatalog() {
@@ -710,7 +755,9 @@ async function importSystemCatalogFile(event: Event) {
     selectedSystemCatalogClass.value = 'Все'
     selectedSystemCatalogCurator.value = 'Все кураторы'
     systemCatalogSearch.value = ''
-    applySystemCatalogPayload(await response.json())
+    const payload: SystemCatalogResponse = await response.json()
+    applySystemCatalogPayload(payload)
+    classificationCatalogRows.value = payload.rows
   } catch (error) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось импортировать таблицу 2'
   } finally {
@@ -736,6 +783,35 @@ async function exportSystemCatalog() {
   URL.revokeObjectURL(url)
 }
 
+async function runNavParser() {
+  if (!selectedOrderId.value || isNavParsing.value) {
+    return
+  }
+
+  isNavParsing.value = true
+  navParseMessage.value = ''
+  navParseError.value = ''
+  navParseNotFound.value = []
+  try {
+    const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
+    const response = await fetch(`${API_BASE_URL}/system-catalog/parse-nav?${query.toString()}`, { method: 'POST' })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось выполнить парсинг nav.tn.ru')
+    }
+
+    const report: NavParseReport = await response.json()
+    navParseMessage.value = `Обновлено ${report.updated} из ${report.total}. Найдено: ${report.found}, не найдено: ${report.notFound.length}, ошибок: ${report.failed}.`
+    navParseNotFound.value = report.notFound
+    selectedClassificationFilters.value = {}
+    await Promise.all([loadSystemCatalog(), loadClassificationCatalog()])
+  } catch (error) {
+    navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
+  } finally {
+    isNavParsing.value = false
+  }
+}
+
 function currentSystemCatalogRows() {
   return systemCatalogRows.value
 }
@@ -756,8 +832,126 @@ function toggleComparisonMenu(orderId: number) {
   openedComparisonMenu.value = openedComparisonMenu.value === orderId ? null : orderId
 }
 
-function selectSystemType(type: (typeof systemTypes)[number]) {
-  selectedSystemType.value = type
+function matchesConstructionType(system: SystemCatalogRow) {
+  return selectedConstructionType.value === 'Все' ||
+    system.characteristics?.some((characteristic) =>
+      characteristic.name === 'Сегмент строительства' && characteristic.value.includes(selectedConstructionType.value),
+    )
+}
+
+function matchesSystemType(system: SystemCatalogRow, type: SystemTypeOption) {
+  return type.slug === '' || system.characteristics?.some((characteristic) =>
+    characteristic.name === 'Тип системы' && characteristic.value === type.name,
+  )
+}
+
+function selectSystemType(type: SystemTypeOption) {
+  selectedSystemTypeSlug.value = type.slug
+  openedClassificationSystemId.value = null
+  clearClassificationFilters()
+}
+
+function selectConstructionType(type: string) {
+  selectedConstructionType.value = type
+  selectedSystemTypeSlug.value = ''
+  openedClassificationSystemId.value = null
+  clearClassificationFilters()
+}
+
+function classificationFilterOptions(name: string) {
+  const values = new Set<string>()
+  for (const system of classificationBaseSystems.value) {
+    if (!matchesSelectedClassificationFilters(system, name)) {
+      continue
+    }
+    for (const characteristic of system.characteristics ?? []) {
+      if (characteristic.name === name && characteristic.value) {
+        values.add(characteristic.value)
+      }
+    }
+  }
+  return [...values].sort((left, right) => left.localeCompare(right, 'ru-RU'))
+}
+
+function classificationFilterOptionCount(name: string, value: string) {
+  return classificationBaseSystems.value.filter((system) =>
+    matchesSelectedClassificationFilters(system, name) &&
+    system.characteristics?.some((characteristic) => characteristic.name === name && characteristic.value === value),
+  ).length
+}
+
+function classificationFilterAvailableCount(name: string) {
+  return classificationBaseSystems.value.filter((system) => matchesSelectedClassificationFilters(system, name)).length
+}
+
+function matchesSelectedClassificationFilters(system: SystemCatalogRow, excludedName = '') {
+  return Object.entries(selectedClassificationFilters.value).every(([name, value]) =>
+    name === excludedName || system.characteristics?.some((characteristic) => characteristic.name === name && characteristic.value === value),
+  )
+}
+
+function toggleClassificationFilter(name: string) {
+  openedClassificationFilter.value = openedClassificationFilter.value === name ? null : name
+}
+
+function selectClassificationFilter(name: string, value: string) {
+  const next = { ...selectedClassificationFilters.value }
+  if (value) {
+    next[name] = value
+  } else {
+    delete next[name]
+  }
+  selectedClassificationFilters.value = next
+  openedClassificationFilter.value = null
+  openedClassificationSystemId.value = null
+}
+
+function clearClassificationFilters() {
+  selectedClassificationFilters.value = {}
+  openedClassificationFilter.value = null
+  openedClassificationSystemId.value = null
+}
+
+function toggleClassificationSystem(systemId: number) {
+  openedClassificationSystemId.value = openedClassificationSystemId.value === systemId ? null : systemId
+}
+
+function enterClassificationDetails(element: Element, done: () => void) {
+  const panel = element as HTMLElement
+  const targetHeight = panel.scrollHeight
+  const animation = panel.animate(
+    [
+      { height: '0px', opacity: 0, transform: 'translateY(-6px)' },
+      { height: `${targetHeight}px`, opacity: 1, transform: 'translateY(0)' },
+    ],
+    { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  )
+  animation.addEventListener('finish', done, { once: true })
+  animation.addEventListener('cancel', done, { once: true })
+}
+
+function leaveClassificationDetails(element: Element, done: () => void) {
+  const panel = element as HTMLElement
+  const startHeight = panel.getBoundingClientRect().height
+  const animation = panel.animate(
+    [
+      { height: `${startHeight}px`, opacity: 1, transform: 'translateY(0)' },
+      { height: '0px', opacity: 0, transform: 'translateY(-6px)' },
+    ],
+    { duration: 360, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
+  )
+  animation.addEventListener('finish', done, { once: true })
+  animation.addEventListener('cancel', done, { once: true })
+}
+
+function updateClassificationCardColumns() {
+  if (window.innerWidth <= 640) {
+    classificationCardColumns.value = 1
+  } else if (window.innerWidth <= 980) {
+    classificationCardColumns.value = 2
+  } else {
+    classificationCardColumns.value = 3
+  }
 }
 
 function openSystemHistory(system: { name?: string; systemName?: string }) {
@@ -791,8 +985,14 @@ function pageTitle() {
 }
 
 onMounted(async () => {
+  updateClassificationCardColumns()
+  window.addEventListener('resize', updateClassificationCardColumns)
   await loadOrders()
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog()])
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateClassificationCardColumns)
 })
 </script>
 
@@ -1209,7 +1409,7 @@ onMounted(async () => {
 
           <label class="search-field classification-search">
             <span>Поиск</span>
-            <input type="search" placeholder="Поиск по названию или ЕКН" />
+            <input v-model="classificationCatalogSearch" type="search" placeholder="Поиск по названию или ЕКН" />
           </label>
         </div>
 
@@ -1220,8 +1420,9 @@ onMounted(async () => {
               v-for="type in constructionTypes"
               :key="type"
               class="type-tab"
-              :class="{ 'type-tab--active': type === 'Промышленное и гражданское строительство' }"
+              :class="{ 'type-tab--active': type === selectedConstructionType }"
               type="button"
+              @click="selectConstructionType(type)"
             >
               {{ type }}
             </button>
@@ -1244,7 +1445,7 @@ onMounted(async () => {
             <div v-if="isSystemTypesOpen" class="system-type-body">
               <div class="system-type-grid">
                 <button
-                  v-for="type in systemTypes.slice(0, 16)"
+                  v-for="type in systemTypes"
                   :key="type.name"
                   class="system-type-card"
                   :class="{ 'is-active': type.name === selectedSystemType.name }"
@@ -1260,47 +1461,134 @@ onMounted(async () => {
         </section>
 
         <div class="classification-layout">
-          <section class="classification-cards" aria-label="Системы классификации">
-            <article
-              v-for="system in classificationSystems"
-              :key="system.code"
-              class="classification-card"
-              :class="`classification-card--${classModifier(system.systemClass)}`"
-            >
-              <header class="classification-card__header">
-                <a href="https://nav.tn.ru/systems/" target="_blank" rel="noreferrer">{{ system.name }}</a>
-                <a class="classification-card__source" href="https://nav.tn.ru/systems/" target="_blank" rel="noreferrer" aria-label="Открыть на nav.tn.ru">
-                  <img :src="browseIcon" alt="" aria-hidden="true" />
-                </a>
-              </header>
+          <section class="classification-cards" aria-label="Системы классификации" aria-live="polite">
+            <p v-if="classificationCatalogError" class="table-message table-message--error classification-cards__message">
+              {{ classificationCatalogError }}
+            </p>
+            <p v-else-if="isClassificationCatalogLoading" class="table-message classification-cards__message">
+              Загрузка систем из таблицы 2...
+            </p>
+            <p v-else-if="classificationSystems.length === 0" class="table-message classification-cards__message">
+              {{ classificationCatalogSearch ? 'Системы не найдены' : 'Импортируйте таблицу 2 для выбранного распоряжения' }}
+            </p>
+            <div v-for="(row, rowIndex) in classificationSystemRows" :key="rowIndex" class="classification-card-row">
+              <article
+                v-for="system in row"
+                :key="system.id"
+                class="classification-card"
+                :class="`classification-card--${classModifier(system.systemClass)}`"
+              >
+                <header class="classification-card__header">
+                  <a :href="system.systemUrl || 'https://nav.tn.ru/systems/'" target="_blank" rel="noreferrer">{{ system.systemName }}</a>
+                  <a class="classification-card__source" :href="system.systemUrl || 'https://nav.tn.ru/systems/'" target="_blank" rel="noreferrer" aria-label="Открыть на nav.tn.ru">
+                    <img :src="browseIcon" alt="" aria-hidden="true" />
+                  </a>
+                </header>
 
-              <dl class="classification-card__meta">
-                <div>
-                  <dt>Шифр</dt>
-                  <dd>{{ system.code }}</dd>
-                </div>
-                <div>
-                  <dt>Класс</dt>
-                  <dd>{{ system.base }}</dd>
-                </div>
-              </dl>
+                <dl class="classification-card__meta">
+                  <div>
+                    <dt>Шифр</dt>
+                    <dd>{{ system.code }}</dd>
+                  </div>
+                  <div>
+                    <dt>Куратор</dt>
+                    <dd>{{ system.curator || 'Куратор не указан' }}</dd>
+                  </div>
+                </dl>
 
-              <button class="classification-card__more" type="button" aria-label="Открыть действия">
-                <i aria-hidden="true" />
-              </button>
-            </article>
+                <button
+                  class="classification-card__more"
+                  :class="{ 'is-open': openedClassificationSystemId === system.id }"
+                  type="button"
+                  :aria-expanded="openedClassificationSystemId === system.id"
+                  aria-label="Показать характеристики системы"
+                  @click="toggleClassificationSystem(system.id)"
+                >
+                  <i aria-hidden="true" />
+                </button>
+              </article>
+
+              <Transition :css="false" @enter="enterClassificationDetails" @leave="leaveClassificationDetails">
+                <div
+                  v-if="openedClassificationSystem && row.some((system) => system.id === openedClassificationSystemId)"
+                  class="classification-details-shell"
+                >
+                  <section class="classification-details">
+                    <div class="classification-details__header">
+                      <strong>{{ openedClassificationSystem.systemName }}</strong>
+                      <div class="classification-details__actions">
+                        <a v-if="openedClassificationSystem.systemUrl" :href="openedClassificationSystem.systemUrl" target="_blank" rel="noreferrer">Открыть на nav.tn.ru</a>
+                        <button type="button" aria-label="Закрыть характеристики" @click="toggleClassificationSystem(openedClassificationSystem.id)">×</button>
+                      </div>
+                    </div>
+                    <table v-if="openedClassificationSystem.characteristics?.length">
+                      <thead>
+                        <tr>
+                          <th>Наименование показателя</th>
+                          <th>Значение</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="characteristic in openedClassificationSystem.characteristics" :key="`${openedClassificationSystem.id}-${characteristic.position}`">
+                          <th>{{ characteristic.name }}</th>
+                          <td>{{ characteristic.value }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    <p v-else class="table-message">Запустите парсер в настройках, чтобы загрузить характеристики.</p>
+                  </section>
+                </div>
+              </Transition>
+            </div>
           </section>
 
           <aside class="classification-sidebar" aria-label="Фильтры классификации">
-            <button
+            <header class="classification-sidebar__header">
+              <div>
+                <strong>Фильтры</strong>
+                <span>{{ classificationSystems.length }} из {{ classificationBaseSystems.length }} систем</span>
+              </div>
+              <button v-if="selectedClassificationFilterCount" type="button" @click="clearClassificationFilters">
+                Сбросить {{ selectedClassificationFilterCount }}
+              </button>
+            </header>
+            <p v-if="classificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
+              Для выбранного типа нет доступных характеристик.
+            </p>
+            <div
               v-for="filter in classificationFilterGroups"
               :key="filter"
-              class="classification-sidebar__item"
-              type="button"
+              class="classification-sidebar__group"
+              :class="{ 'is-open': openedClassificationFilter === filter, 'is-selected': selectedClassificationFilters[filter] }"
             >
-              <span>{{ filter }}</span>
-              <i aria-hidden="true" />
-            </button>
+              <button
+                class="classification-sidebar__item"
+                type="button"
+                @click="toggleClassificationFilter(filter)"
+              >
+                <span class="classification-sidebar__label">
+                  <strong>{{ filter }}</strong>
+                  <small v-if="selectedClassificationFilters[filter]">{{ selectedClassificationFilters[filter] }}</small>
+                </span>
+                <i aria-hidden="true" />
+              </button>
+              <div v-if="openedClassificationFilter === filter" class="classification-sidebar__options">
+                <button type="button" :class="{ 'is-selected': !selectedClassificationFilters[filter] }" @click="selectClassificationFilter(filter, '')">
+                  <span>Все</span>
+                  <small>{{ classificationFilterAvailableCount(filter) }}</small>
+                </button>
+                <button
+                  v-for="option in classificationFilterOptions(filter)"
+                  :key="option"
+                  type="button"
+                  :class="{ 'is-selected': selectedClassificationFilters[filter] === option }"
+                  @click="selectClassificationFilter(filter, option)"
+                >
+                  <span>{{ option }}</span>
+                  <small>{{ classificationFilterOptionCount(filter, option) }}</small>
+                </button>
+              </div>
+            </div>
           </aside>
         </div>
       </section>
@@ -1314,7 +1602,19 @@ onMounted(async () => {
               v-for="(orderId, index) in comparisonOrderIds"
               :key="orderId"
               class="custom-select comparison-order"
-              :class="{ 'is-open': openedSelect === `comparison-${index}` }"
+              :class="{
+                'is-open': openedSelect === `comparison-${index}`,
+                'is-dragging': draggedComparisonOrderId === orderId,
+                'is-drop-target': comparisonDropIndex === index && draggedComparisonOrderId !== orderId,
+              }"
+              draggable="true"
+              :aria-grabbed="draggedComparisonOrderId === orderId"
+              title="Перетащите, чтобы изменить порядок"
+              @dragstart="startComparisonOrderDrag($event, orderId)"
+              @dragenter.prevent="enterComparisonOrderDrop(index)"
+              @dragover.prevent
+              @drop.prevent="dropComparisonOrder(index)"
+              @dragend="endComparisonOrderDrag"
             >
               <div class="comparison-order__control">
                 <button class="custom-select__button" type="button" @click.stop="toggleSelect(`comparison-${index}`)">
@@ -1354,20 +1654,21 @@ onMounted(async () => {
             </div>
 
             <div
-              v-if="comparisonOrderIds.length < orders.length"
               class="custom-select comparison-add-select"
               :class="{ 'is-open': openedSelect === 'comparison-add' }"
             >
               <button
                 class="comparison-add-button"
                 type="button"
+                :disabled="availableComparisonOrders().length === 0"
                 aria-label="Добавить распоряжение"
+                :title="availableComparisonOrders().length ? 'Добавить распоряжение' : 'Все распоряжения уже добавлены'"
                 @click.stop="toggleSelect('comparison-add')"
               >
                 +
               </button>
               <Transition name="select-menu">
-                <div v-if="openedSelect === 'comparison-add'" class="custom-select__menu comparison-add-menu">
+                <div v-if="openedSelect === 'comparison-add' && availableComparisonOrders().length" class="custom-select__menu comparison-add-menu">
                   <button
                     v-for="order in availableComparisonOrders()"
                     :key="order.id"
@@ -1426,10 +1727,18 @@ onMounted(async () => {
       <section v-else-if="activePage === 'settings'" class="settings-page">
         <section class="settings-section parser-settings" aria-labelledby="parser-settings-title">
           <h1 id="parser-settings-title">Парсинг навигатора</h1>
-          <label class="settings-inline-field">
-            <span>Частота обновления БД фильтров и ссылок на системы</span>
-            <input type="text" value="XX дней" />
-          </label>
+          <p>Загрузить с nav.tn.ru ссылки и характеристики систем для БД «{{ selectedOrderName() }}».</p>
+          <button class="import-button parser-settings__button" type="button" :disabled="isNavParsing || !selectedOrderId" @click="runNavParser">
+            {{ isNavParsing ? 'Парсинг выполняется…' : 'Запустить парсер' }}
+          </button>
+          <p v-if="navParseError" class="table-message table-message--error">{{ navParseError }}</p>
+          <p v-else-if="navParseMessage" class="table-message table-message--success">{{ navParseMessage }}</p>
+          <details v-if="navParseNotFound.length" class="parser-settings__not-found">
+            <summary>Не найденные на nav.tn.ru системы ({{ navParseNotFound.length }})</summary>
+            <ul>
+              <li v-for="systemName in navParseNotFound" :key="systemName">{{ systemName }}</li>
+            </ul>
+          </details>
         </section>
 
         <section class="settings-section" aria-labelledby="orders-db-title">

@@ -60,6 +60,24 @@ CREATE INDEX IF NOT EXISTS idx_system_catalog_position ON system_catalog(positio
 CREATE INDEX IF NOT EXISTS idx_system_catalog_code ON system_catalog(code);
 CREATE INDEX IF NOT EXISTS idx_system_catalog_class ON system_catalog(system_class);
 CREATE INDEX IF NOT EXISTS idx_system_catalog_curator ON system_catalog(curator);
+
+CREATE TABLE IF NOT EXISTS system_characteristics (
+	id BIGSERIAL PRIMARY KEY,
+	system_catalog_id BIGINT NOT NULL REFERENCES system_catalog(id) ON DELETE CASCADE,
+	position INTEGER NOT NULL,
+	name TEXT NOT NULL,
+	value TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_characteristics_catalog_id ON system_characteristics(system_catalog_id);
+CREATE INDEX IF NOT EXISTS idx_system_characteristics_name ON system_characteristics(name);
+
+CREATE TABLE IF NOT EXISTS nav_system_types (
+	slug TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	position INTEGER NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `
 
 	if _, err := database.ExecContext(ctx, query); err != nil {

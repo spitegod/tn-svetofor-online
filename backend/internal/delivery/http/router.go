@@ -15,10 +15,11 @@ type Router struct {
 	classification *service.ClassificationService
 	systemCatalog  *service.SystemCatalogService
 	orders         *service.OrderService
+	navParser      *service.NavParserService
 }
 
-func NewRouter(classification *service.ClassificationService, systemCatalog *service.SystemCatalogService, orders *service.OrderService) http.Handler {
-	router := &Router{classification: classification, systemCatalog: systemCatalog, orders: orders}
+func NewRouter(classification *service.ClassificationService, systemCatalog *service.SystemCatalogService, orders *service.OrderService, navParser *service.NavParserService) http.Handler {
+	router := &Router{classification: classification, systemCatalog: systemCatalog, orders: orders, navParser: navParser}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
@@ -32,8 +33,19 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("GET /api/system-catalog", router.listSystemCatalog)
 	mux.HandleFunc("POST /api/system-catalog/import", router.importSystemCatalog)
 	mux.HandleFunc("GET /api/system-catalog/export", router.exportSystemCatalog)
+	mux.HandleFunc("POST /api/system-catalog/parse-nav", router.parseNavSystemCatalog)
 
 	return mux
+}
+
+func (r *Router) parseNavSystemCatalog(w http.ResponseWriter, request *http.Request) {
+	report, err := r.navParser.Parse(request.Context(), orderIDFromRequest(request))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, report)
 }
 
 func health(w http.ResponseWriter, r *http.Request) {
