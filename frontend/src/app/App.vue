@@ -2,10 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import logo from '@/shared/assets/logo.png'
 import folderIcon from '@/shared/assets/folder.png'
-import openIcon from '@/shared/assets/open.png'
 import browseIcon from '@/shared/assets/browse.png'
 import trashIcon from '@/shared/assets/trash.png'
-import reverseIcon from '@/shared/assets/reverse.png'
 
 type ClassificationChange = {
   id: number
@@ -75,6 +73,31 @@ type SystemCatalogResponse = {
   systemTypes: SystemTypeOption[]
 }
 
+type SystemDocumentRow = {
+  id: number
+  orderId: number
+  orderName: string
+  systemCatalogId: number
+  position: number
+  code: string
+  systemName: string
+  systemUrl: string
+  systemClass: string
+  curator: string
+  comparisonSelected: boolean
+  comment: string
+  createdAt: string
+  updatedAt: string
+  characteristics: SystemCharacteristic[]
+}
+
+type SystemDocumentResponse = {
+  rows: SystemDocumentRow[]
+  stats: SystemCatalogStats
+  classOptions: string[]
+  curatorOptions: string[]
+}
+
 type SystemTypeOption = {
   slug: string
   name: string
@@ -118,27 +141,27 @@ const selectedConstructionType = ref(constructionTypes[0])
 const classOptions = ['Рекомендованная', 'Разрешенная', 'Запрещенная']
 const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'Уртенков А.', 'Золотарев М.', 'Кузнецова Н.']
 
-const documentRows = Array.from({ length: 4 }, (_, index) => ({
-  id: index + 1,
-  name: 'ТН-СТИЛОБАТ КЛАССИК АВТО',
-  comment:
-    'Тут комментарий может отображаться в несколько строк, если много текста нужно оставить',
-  document: 'название документа',
-}))
-
 const orders = ref<Order[]>([])
 const selectedOrderId = ref<number | null>(null)
 const comparisonOrderIds = ref<number[]>([])
-const comparisonCatalogByOrder = ref<Record<number, SystemCatalogRow[]>>({})
+const comparisonCatalogByOrder = ref<Record<number, SystemDocumentRow[]>>({})
+const comparisonPendingIds = ref<number[]>([])
+const comparisonAllOrders = ref(true)
+const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
 const isComparisonLoading = ref(false)
 const comparisonError = ref('')
 const isOrdersLoading = ref(false)
 const ordersError = ref('')
 const orderRenameTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
+const documentCommentTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
+let systemDocumentSearchTimer: ReturnType<typeof window.setTimeout> | null = null
 const selectedSystemTypeSlug = ref('')
 const isSystemTypesOpen = ref(false)
-const selectedHistorySystem = ref<{ name: string } | null>(null)
+const selectedHistorySystem = ref<SystemDocumentRow | null>(null)
+const systemHistoryRows = ref<SystemDocumentRow[]>([])
+const isSystemHistoryLoading = ref(false)
+const systemHistoryError = ref('')
 const isHistoryOpen = ref(false)
 const openedSelect = ref<string | null>(null)
 const openedComparisonMenu = ref<number | null>(null)
@@ -161,6 +184,11 @@ const tableSearch = ref('')
 const isClassificationLoading = ref(false)
 const classificationError = ref('')
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
+const systemDocumentRows = ref<SystemDocumentRow[]>([])
+const documentRows = ref<SystemDocumentRow[]>([])
+const documentSearch = ref('')
+const documentError = ref('')
+const isDocumentTableLoading = ref(false)
 const classificationCatalogRows = ref<SystemCatalogRow[]>([])
 const classificationCatalogSearch = ref('')
 const isClassificationCatalogLoading = ref(false)
@@ -170,14 +198,24 @@ const openedClassificationSystemId = ref<number | null>(null)
 const classificationCardColumns = ref(3)
 const openedClassificationFilter = ref<string | null>(null)
 const selectedClassificationFilters = ref<Record<string, string>>({})
+const systemTypeSourceRows = computed(() => activePage.value === 'systems' ? systemDocumentRows.value : classificationCatalogRows.value)
 const systemTypes = computed(() => [{ slug: '', name: 'Все системы', position: 0 }, ...parsedSystemTypes.value].map((type) => ({
   ...type,
-  count: classificationCatalogRows.value.filter((system) =>
+  count: systemTypeSourceRows.value.filter((system) =>
     matchesConstructionType(system) && matchesSystemType(system, type),
   ).length,
 })))
 const selectedSystemType = computed(() =>
   systemTypes.value.find((type) => type.slug === selectedSystemTypeSlug.value) ?? systemTypes.value[0],
+)
+const filteredSystemDocumentRows = computed(() => systemDocumentRows.value.filter((system) =>
+  matchesConstructionType(system) && matchesSystemType(system, selectedSystemType.value),
+))
+const allVisibleSystemsSelected = computed(() =>
+  filteredSystemDocumentRows.value.length > 0 && filteredSystemDocumentRows.value.every((row) => row.comparisonSelected),
+)
+const someVisibleSystemsSelected = computed(() =>
+  filteredSystemDocumentRows.value.some((row) => row.comparisonSelected) && !allVisibleSystemsSelected.value,
 )
 const classificationBaseSystems = computed(() => classificationCatalogRows.value.filter((system) =>
   matchesConstructionType(system) && matchesSystemType(system, selectedSystemType.value),
@@ -298,12 +336,13 @@ async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
   openedSelect.value = null
   classificationCatalogSearch.value = ''
+  systemCatalogSearch.value = ''
   selectedSystemTypeSlug.value = ''
   clearClassificationFilters()
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
 }
 
-function comparisonRowKey(row: Pick<SystemCatalogRow, 'code' | 'systemName'>) {
+function comparisonRowKey(row: Pick<SystemDocumentRow, 'code' | 'systemName'>) {
   const code = row.code.trim()
   if (code) {
     return `code:${code.toLowerCase()}`
@@ -315,13 +354,13 @@ function comparisonRowKey(row: Pick<SystemCatalogRow, 'code' | 'systemName'>) {
 async function loadComparisonCatalog(orderId: number) {
   comparisonError.value = ''
 
-  const query = new URLSearchParams({ orderId: String(orderId) })
-  const response = await fetch(`${API_BASE_URL}/system-catalog?${query.toString()}`)
+  const query = new URLSearchParams({ orderId: String(orderId), comparison: 'true' })
+  const response = await fetch(`${API_BASE_URL}/system-documents?${query.toString()}`)
   if (!response.ok) {
     throw new Error('Не удалось загрузить данные сравнения')
   }
 
-  const payload: SystemCatalogResponse = await response.json()
+  const payload: SystemDocumentResponse = await response.json()
   comparisonCatalogByOrder.value = {
     ...comparisonCatalogByOrder.value,
     [orderId]: payload.rows,
@@ -361,7 +400,7 @@ async function createOrder() {
   const order: Order = await response.json()
   orders.value = [order, ...orders.value]
   selectedOrderId.value = order.id
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
 }
 
 async function deleteOrder(order: Order) {
@@ -384,7 +423,7 @@ async function deleteOrder(order: Order) {
   const nextCatalogs = { ...comparisonCatalogByOrder.value }
   delete nextCatalogs[order.id]
   comparisonCatalogByOrder.value = nextCatalogs
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
 }
 
 function scheduleOrderRename(order: Order) {
@@ -528,7 +567,14 @@ function comparisonRows() {
     valuesByOrder.set(orderId, values)
   }
 
-  return orderedKeys
+  const completeKeys = orderedKeys.filter((key) =>
+    comparisonOrderIds.value.every((orderId) => valuesByOrder.get(orderId)?.has(key)),
+  )
+  const partialKeys = orderedKeys.filter((key) =>
+    !comparisonOrderIds.value.every((orderId) => valuesByOrder.get(orderId)?.has(key)),
+  )
+
+  return [...completeKeys, ...partialKeys]
     .filter((key) => !hiddenComparisonRows.value.includes(key))
     .map((key) => ({
       key,
@@ -673,10 +719,6 @@ function buildSystemCatalogQuery() {
 
 function applySystemCatalogPayload(payload: SystemCatalogResponse) {
   systemCatalogRows.value = payload.rows
-  systemCatalogStats.value = payload.stats
-  systemCatalogClassOptions.value = payload.classOptions.length > 1 ? payload.classOptions : systemCatalogClassOptions.value
-  systemCatalogCuratorOptions.value =
-    payload.curatorOptions.length > 1 ? ['Все кураторы', ...payload.curatorOptions.filter((option) => option !== 'Все')] : systemCatalogCuratorOptions.value
   parsedSystemTypes.value = payload.systemTypes ?? parsedSystemTypes.value
   if (selectedSystemTypeSlug.value && !parsedSystemTypes.value.some((type) => type.slug === selectedSystemTypeSlug.value)) {
     selectedSystemTypeSlug.value = ''
@@ -721,12 +763,6 @@ async function loadSystemCatalog() {
 
     const payload: SystemCatalogResponse = await response.json()
     applySystemCatalogPayload(payload)
-    if (selectedOrderId.value && comparisonOrderIds.value.includes(selectedOrderId.value)) {
-      comparisonCatalogByOrder.value = {
-        ...comparisonCatalogByOrder.value,
-        [selectedOrderId.value]: payload.rows,
-      }
-    }
   } catch (error) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 2'
   } finally {
@@ -769,6 +805,10 @@ async function importSystemCatalogFile(event: Event) {
     const payload: SystemCatalogResponse = await response.json()
     applySystemCatalogPayload(payload)
     classificationCatalogRows.value = payload.rows
+    await Promise.all([loadSystemDocuments(), loadDocumentTable()])
+    if (selectedOrderId.value && comparisonOrderIds.value.includes(selectedOrderId.value)) {
+      await loadComparisonCatalog(selectedOrderId.value)
+    }
   } catch (error) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось импортировать таблицу 2'
   } finally {
@@ -779,7 +819,7 @@ async function importSystemCatalogFile(event: Event) {
 
 async function exportSystemCatalog() {
   const query = buildSystemCatalogQuery()
-  const response = await fetch(`${API_BASE_URL}/system-catalog/export?${query.toString()}`)
+  const response = await fetch(`${API_BASE_URL}/system-documents/export?${query.toString()}`)
   if (!response.ok) {
     systemCatalogError.value = 'Не удалось экспортировать таблицу 2'
     return
@@ -789,7 +829,7 @@ async function exportSystemCatalog() {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url
-  link.download = 'system-catalog.xlsx'
+  link.download = 'system-documents.xlsx'
   link.click()
   URL.revokeObjectURL(url)
 }
@@ -815,7 +855,7 @@ async function runNavParser() {
     navParseMessage.value = `Обновлено ${report.updated} из ${report.total}. Найдено: ${report.found}, не найдено: ${report.notFound.length}, ошибок: ${report.failed}.`
     navParseNotFound.value = report.notFound
     selectedClassificationFilters.value = {}
-    await Promise.all([loadSystemCatalog(), loadClassificationCatalog()])
+    await Promise.all([loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
   } catch (error) {
     navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
   } finally {
@@ -825,6 +865,10 @@ async function runNavParser() {
 
 function currentSystemCatalogRows() {
   return systemCatalogRows.value
+}
+
+function currentSystemDocumentRows() {
+  return filteredSystemDocumentRows.value
 }
 
 function setPage(page: string) {
@@ -843,14 +887,14 @@ function toggleComparisonMenu(orderId: number) {
   openedComparisonMenu.value = openedComparisonMenu.value === orderId ? null : orderId
 }
 
-function matchesConstructionType(system: SystemCatalogRow) {
+function matchesConstructionType(system: { characteristics?: SystemCharacteristic[] }) {
   return selectedConstructionType.value === 'Все' ||
     system.characteristics?.some((characteristic) =>
       characteristic.name === 'Сегмент строительства' && characteristic.value.includes(selectedConstructionType.value),
     )
 }
 
-function matchesSystemType(system: SystemCatalogRow, type: SystemTypeOption) {
+function matchesSystemType(system: { characteristics?: SystemCharacteristic[] }, type: SystemTypeOption) {
   return type.slug === '' || system.characteristics?.some((characteristic) =>
     characteristic.name === 'Тип системы' && characteristic.value === type.name,
   )
@@ -930,6 +974,219 @@ function classificationRowPositions() {
   }))
 }
 
+function applySystemDocumentPayload(payload: SystemDocumentResponse) {
+  systemDocumentRows.value = payload.rows
+  systemCatalogStats.value = payload.stats
+  systemCatalogClassOptions.value = payload.classOptions.length > 1 ? payload.classOptions : ['Все', ...classOptions]
+  systemCatalogCuratorOptions.value = payload.curatorOptions.length > 1
+    ? ['Все кураторы', ...payload.curatorOptions.filter((option) => option !== 'Все')]
+    : ['Все кураторы']
+}
+
+async function loadSystemDocuments() {
+  isSystemCatalogLoading.value = true
+  systemCatalogError.value = ''
+  try {
+    const query = buildSystemCatalogQuery()
+    const response = await fetch(`${API_BASE_URL}/system-documents?${query.toString()}`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить список систем')
+    }
+    applySystemDocumentPayload(await response.json())
+  } catch (error) {
+    systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить список систем'
+  } finally {
+    isSystemCatalogLoading.value = false
+  }
+}
+
+function scheduleSystemDocumentSearch() {
+  if (systemDocumentSearchTimer) {
+    window.clearTimeout(systemDocumentSearchTimer)
+  }
+  systemDocumentSearchTimer = window.setTimeout(() => {
+    systemDocumentSearchTimer = null
+    loadSystemDocuments()
+  }, 250)
+}
+
+async function loadDocumentTable() {
+  isDocumentTableLoading.value = true
+  documentError.value = ''
+  try {
+    const query = new URLSearchParams()
+    if (selectedOrderId.value) {
+      query.set('orderId', String(selectedOrderId.value))
+    }
+    const response = await fetch(`${API_BASE_URL}/system-documents?${query.toString()}`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить таблицу 3')
+    }
+    const payload: SystemDocumentResponse = await response.json()
+    documentRows.value = payload.rows
+  } catch (error) {
+    documentError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 3'
+  } finally {
+    isDocumentTableLoading.value = false
+  }
+}
+
+const filteredDocumentRows = computed(() => {
+  const query = documentSearch.value.trim().toLocaleLowerCase('ru-RU')
+  if (!query) {
+    return documentRows.value
+  }
+  return documentRows.value.filter((row) =>
+    row.systemName.toLocaleLowerCase('ru-RU').includes(query) || row.code.toLocaleLowerCase('ru-RU').includes(query),
+  )
+})
+
+function scheduleDocumentCommentSave(row: SystemDocumentRow) {
+  const currentTimer = documentCommentTimers.get(row.id)
+  if (currentTimer) {
+    window.clearTimeout(currentTimer)
+  }
+  documentCommentTimers.set(row.id, window.setTimeout(() => saveDocumentComment(row), 500))
+}
+
+async function saveDocumentComment(row: SystemDocumentRow) {
+  const currentTimer = documentCommentTimers.get(row.id)
+  if (currentTimer) {
+    window.clearTimeout(currentTimer)
+    documentCommentTimers.delete(row.id)
+  }
+  if (!selectedOrderId.value) {
+    return
+  }
+  try {
+    const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
+    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}?${query.toString()}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: row.comment }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось сохранить комментарий')
+    }
+    const saved: SystemDocumentRow = await response.json()
+    const listRow = systemDocumentRows.value.find((item) => item.id === saved.id)
+    if (listRow) {
+      listRow.comment = saved.comment
+      listRow.updatedAt = saved.updatedAt
+    }
+    documentError.value = ''
+  } catch (error) {
+    documentError.value = error instanceof Error ? error.message : 'Не удалось сохранить комментарий'
+  }
+}
+
+async function toggleSystemComparison(row: SystemDocumentRow, event: Event) {
+  if (!selectedOrderId.value || comparisonPendingIds.value.includes(row.id)) {
+    return
+  }
+  const selected = (event.target as HTMLInputElement).checked
+  const previous = row.comparisonSelected
+  row.comparisonSelected = selected
+  comparisonPendingIds.value = [...comparisonPendingIds.value, row.id]
+  systemCatalogError.value = ''
+  try {
+    const query = new URLSearchParams({ orderId: String(row.orderId) })
+    const response = await fetch(`${API_BASE_URL}/system-documents/comparison?${query.toString()}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        selected,
+        allOrders: comparisonAllOrders.value,
+        systems: [{ code: row.code, systemName: row.systemName }],
+      }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось сохранить выбор для сравнения')
+    }
+    const documentRow = documentRows.value.find((item) => item.id === row.id)
+    if (documentRow) {
+      documentRow.comparisonSelected = selected
+    }
+    if (comparisonAllOrders.value) {
+      await loadComparisonCatalogs()
+    } else if (comparisonOrderIds.value.includes(row.orderId)) {
+      await loadComparisonCatalog(row.orderId)
+    }
+  } catch (error) {
+    row.comparisonSelected = previous
+    systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось сохранить выбор для сравнения'
+  } finally {
+    comparisonPendingIds.value = comparisonPendingIds.value.filter((id) => id !== row.id)
+  }
+}
+
+async function toggleAllSystemComparisons(event: Event) {
+  if (!selectedOrderId.value || isBulkComparisonUpdating.value || filteredSystemDocumentRows.value.length === 0) {
+    return
+  }
+  const selected = (event.target as HTMLInputElement).checked
+  const rows = [...filteredSystemDocumentRows.value]
+  const previous = new Map(rows.map((row) => [row.id, row.comparisonSelected]))
+  rows.forEach((row) => { row.comparisonSelected = selected })
+  isBulkComparisonUpdating.value = true
+  systemCatalogError.value = ''
+  try {
+    const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
+    const response = await fetch(`${API_BASE_URL}/system-documents/comparison?${query.toString()}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        selected,
+        allOrders: comparisonAllOrders.value,
+        systems: rows.map((row) => ({ code: row.code, systemName: row.systemName })),
+      }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось сохранить массовый выбор')
+    }
+    documentRows.value.forEach((row) => {
+      if (rows.some((selectedRow) => selectedRow.id === row.id)) {
+        row.comparisonSelected = selected
+      }
+    })
+    await loadComparisonCatalogs()
+  } catch (error) {
+    rows.forEach((row) => { row.comparisonSelected = previous.get(row.id) ?? false })
+    systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось сохранить массовый выбор'
+  } finally {
+    isBulkComparisonUpdating.value = false
+  }
+}
+
+async function deleteSystemDocument(row: SystemDocumentRow) {
+  if (!selectedOrderId.value || !window.confirm(`Удалить «${row.systemName}» из таблицы 3 текущего распоряжения?`)) {
+    return
+  }
+  const commentTimer = documentCommentTimers.get(row.id)
+  if (commentTimer) {
+    window.clearTimeout(commentTimer)
+    documentCommentTimers.delete(row.id)
+  }
+  documentError.value = ''
+  try {
+    const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
+    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}?${query.toString()}`, { method: 'DELETE' })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось удалить запись таблицы 3')
+    }
+    await Promise.all([loadDocumentTable(), loadSystemDocuments()])
+    if (selectedHistorySystem.value?.id === row.id) {
+      closeSystemHistory()
+    }
+  } catch (error) {
+    documentError.value = error instanceof Error ? error.message : 'Не удалось удалить запись таблицы 3'
+  }
+}
+
 async function toggleClassificationSystem(systemId: number) {
   const shouldOpen = openedClassificationSystemId.value !== systemId
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -996,14 +1253,31 @@ function updateClassificationCardColumns() {
   }
 }
 
-function openSystemHistory(system: { name?: string; systemName?: string }) {
-  selectedHistorySystem.value = { name: system.name ?? system.systemName ?? '' }
+async function openSystemHistory(system: SystemDocumentRow) {
+  selectedHistorySystem.value = system
   isHistoryOpen.value = false
+  isSystemHistoryLoading.value = true
+  systemHistoryError.value = ''
+  systemHistoryRows.value = []
+  try {
+    const query = new URLSearchParams({ code: system.code, systemName: system.systemName })
+    const response = await fetch(`${API_BASE_URL}/system-documents/history?${query.toString()}`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить историю системы')
+    }
+    systemHistoryRows.value = await response.json()
+  } catch (error) {
+    systemHistoryError.value = error instanceof Error ? error.message : 'Не удалось загрузить историю системы'
+  } finally {
+    isSystemHistoryLoading.value = false
+  }
 }
 
 function closeSystemHistory() {
   selectedHistorySystem.value = null
   isHistoryOpen.value = false
+  systemHistoryRows.value = []
+  systemHistoryError.value = ''
 }
 
 function classModifier(value: string) {
@@ -1030,11 +1304,16 @@ onMounted(async () => {
   updateClassificationCardColumns()
   window.addEventListener('resize', updateClassificationCardColumns)
   await loadOrders()
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateClassificationCardColumns)
+  if (systemDocumentSearchTimer) {
+    window.clearTimeout(systemDocumentSearchTimer)
+  }
+  documentCommentTimers.forEach((timer) => window.clearTimeout(timer))
+  orderRenameTimers.forEach((timer) => window.clearTimeout(timer))
 })
 </script>
 
@@ -1281,8 +1560,9 @@ onBeforeUnmount(() => {
                 v-for="type in constructionTypes"
                 :key="type"
                 class="type-tab"
-                :class="{ 'type-tab--active': type === 'Промышленное и гражданское строительство' }"
+                :class="{ 'type-tab--active': type === selectedConstructionType }"
                 type="button"
+                @click="selectConstructionType(type)"
               >
                 {{ type }}
               </button>
@@ -1306,7 +1586,7 @@ onBeforeUnmount(() => {
             <div v-if="isSystemTypesOpen" class="system-type-body">
               <label class="search-field">
                 <span>Поиск</span>
-                <input type="search" placeholder="Поиск по названию или ЕКН" />
+                <input v-model="systemCatalogSearch" type="search" placeholder="Поиск по названию или ЕКН" @input="scheduleSystemDocumentSearch" />
               </label>
 
               <div class="system-type-grid">
@@ -1342,7 +1622,7 @@ onBeforeUnmount(() => {
                     class="custom-select__option"
                     :class="{ 'is-selected': option === selectedSystemCatalogClass }"
                     type="button"
-                    @click="selectedSystemCatalogClass = option; openedSelect = null; loadSystemCatalog()"
+                    @click="selectedSystemCatalogClass = option; openedSelect = null; loadSystemDocuments()"
                   >
                     {{ option }}
                   </button>
@@ -1366,13 +1646,31 @@ onBeforeUnmount(() => {
                     class="custom-select__option"
                     :class="{ 'is-selected': option === selectedSystemCatalogCurator }"
                     type="button"
-                    @click="selectedSystemCatalogCurator = option; openedSelect = null; loadSystemCatalog()"
+                    @click="selectedSystemCatalogCurator = option; openedSelect = null; loadSystemDocuments()"
                   >
                     {{ option }}
                   </button>
                 </div>
               </Transition>
             </div>
+          </div>
+
+          <div class="comparison-bulk-controls" aria-label="Массовый выбор для сравнения">
+            <label class="toolbar-checkbox" :class="{ 'is-partial': someVisibleSystemsSelected }">
+              <input
+                type="checkbox"
+                :checked="allVisibleSystemsSelected"
+                :disabled="isBulkComparisonUpdating || currentSystemDocumentRows().length === 0"
+                @change="toggleAllSystemComparisons"
+              />
+              <span aria-hidden="true" />
+              <strong>Выбрать все</strong>
+            </label>
+            <label class="toolbar-checkbox">
+              <input v-model="comparisonAllOrders" type="checkbox" :disabled="isBulkComparisonUpdating" />
+              <span aria-hidden="true" />
+              <strong>Все распоряжения</strong>
+            </label>
           </div>
 
           <button class="export-button" type="button" @click="exportSystemCatalog">Экспортировать таблицу</button>
@@ -1393,10 +1691,10 @@ onBeforeUnmount(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-if="currentSystemCatalogRows().length === 0">
-                <td class="empty-table-cell" colspan="5">В этом распоряжении пока нет данных таблицы 2</td>
+              <tr v-if="currentSystemDocumentRows().length === 0">
+                <td class="empty-table-cell" colspan="5">В таблице 3 этого распоряжения пока нет систем</td>
               </tr>
-              <tr v-for="row in currentSystemCatalogRows()" :key="row.id">
+              <tr v-for="row in currentSystemDocumentRows()" :key="row.id">
                 <td>{{ row.code }}</td>
                 <td>
                   <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
@@ -1412,9 +1710,18 @@ onBeforeUnmount(() => {
                 </td>
                 <td>{{ row.curator }}</td>
                 <td>
-                  <span class="compare-mark" :class="{ 'is-checked': row.position % 3 === 0 }">
-                    {{ row.position % 3 === 0 ? '✓' : '' }}
-                  </span>
+                  <label class="compare-checkbox" :class="{ 'is-pending': comparisonPendingIds.includes(row.id) }">
+                    <input
+                      type="checkbox"
+                      :checked="row.comparisonSelected"
+                      :disabled="comparisonPendingIds.includes(row.id)"
+                      :aria-label="`Добавить ${row.systemName} в сравнение`"
+                      @change="toggleSystemComparison(row, $event)"
+                    />
+                    <span class="compare-mark" :class="{ 'is-checked': row.comparisonSelected }" aria-hidden="true">
+                      {{ row.comparisonSelected ? '✓' : '' }}
+                    </span>
+                  </label>
                 </td>
               </tr>
             </tbody>
@@ -1989,9 +2296,12 @@ onBeforeUnmount(() => {
             <div class="settings-table-toolbar">
               <span>Таблица 3</span>
               <label class="settings-search">
-                <input type="search" placeholder="Поиск по названию или ЕКН" />
+                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или ЕКН" />
               </label>
             </div>
+
+            <p v-if="documentError" class="table-message table-message--error">{{ documentError }}</p>
+            <p v-else-if="isDocumentTableLoading" class="table-message">Загрузка таблицы 3...</p>
 
             <div class="systems-table settings-docs-table">
               <table>
@@ -2004,24 +2314,29 @@ onBeforeUnmount(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="row in documentRows" :key="`document-${row.id}`">
-                    <td>{{ row.name }}</td>
-                    <td>{{ row.comment }}</td>
+                  <tr v-if="filteredDocumentRows.length === 0">
+                    <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 3</td>
+                  </tr>
+                  <tr v-for="row in filteredDocumentRows" :key="`document-${row.id}`">
                     <td>
-                      <a class="settings-document-link" href="#">
-                        <img :src="openIcon" alt="" aria-hidden="true" />
-                        {{ row.document }}
-                      </a>
+                      <strong>{{ row.systemName }}</strong>
+                      <small class="settings-docs-table__code">{{ row.code }}</small>
                     </td>
                     <td>
+                      <textarea
+                        v-model="row.comment"
+                        class="document-comment-input"
+                        rows="2"
+                        placeholder="Добавьте комментарий…"
+                        :aria-label="`Комментарий к ${row.systemName}`"
+                        @input="scheduleDocumentCommentSave(row)"
+                        @blur="saveDocumentComment(row)"
+                      />
+                    </td>
+                    <td class="document-empty-cell">—</td>
+                    <td>
                       <div class="document-actions">
-                        <button class="icon-action-button" type="button" aria-label="Открыть папку">
-                          <img :src="folderIcon" alt="" aria-hidden="true" />
-                        </button>
-                        <button class="icon-action-button" type="button" aria-label="Обновить документ">
-                          <img :src="reverseIcon" alt="" aria-hidden="true" />
-                        </button>
-                        <button class="icon-action-button icon-action-button--danger" type="button" aria-label="Удалить документ">
+                        <button class="icon-action-button icon-action-button--danger" type="button" :aria-label="`Удалить ${row.systemName} из таблицы 3`" @click="deleteSystemDocument(row)">
                           <img :src="trashIcon" alt="" aria-hidden="true" />
                         </button>
                       </div>
@@ -2048,13 +2363,16 @@ onBeforeUnmount(() => {
             </button>
 
             <header class="system-history-header">
-              <h2>{{ selectedHistorySystem.name }}</h2>
-              <a class="system-history-source" href="https://nav.tn.ru/systems/" target="_blank" rel="noreferrer" aria-label="Открыть на nav.tn.ru">
+              <h2>{{ selectedHistorySystem.systemName }}</h2>
+              <a class="system-history-source" :href="selectedHistorySystem.systemUrl || 'https://nav.tn.ru/systems/'" target="_blank" rel="noreferrer" aria-label="Открыть на nav.tn.ru">
                 <img :src="browseIcon" alt="" aria-hidden="true" />
               </a>
             </header>
 
-            <div class="history-table">
+            <p v-if="isSystemHistoryLoading" class="table-message">Загрузка истории...</p>
+            <p v-else-if="systemHistoryError" class="table-message table-message--error">{{ systemHistoryError }}</p>
+
+            <div v-else-if="systemHistoryRows.length" class="history-table">
               <table>
                 <thead>
                   <tr>
@@ -2064,21 +2382,16 @@ onBeforeUnmount(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr>
-                    <td>№ ТД-Р-143 от 24.10.2025</td>
-                    <td>Тут комментарий может отображаться в несколько строк, если много текста нужно оставить</td>
-                    <td>
-                      <a class="document-link" href="#">
-                        <img :src="openIcon" alt="" aria-hidden="true" />
-                        открыть
-                      </a>
-                    </td>
+                  <tr v-for="row in systemHistoryRows.slice(0, 1)" :key="`history-current-${row.id}`">
+                    <td>{{ row.orderName }}</td>
+                    <td :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</td>
+                    <td class="document-empty-cell">—</td>
                   </tr>
                 </tbody>
               </table>
             </div>
 
-            <button class="history-toggle" type="button" @click="isHistoryOpen = !isHistoryOpen">
+            <button v-if="systemHistoryRows.length > 1" class="history-toggle" type="button" @click="isHistoryOpen = !isHistoryOpen">
               {{ isHistoryOpen ? 'скрыть историю изменений' : 'развернуть историю изменений' }}
               <i aria-hidden="true" />
             </button>
@@ -2087,25 +2400,10 @@ onBeforeUnmount(() => {
               <div v-if="isHistoryOpen" class="history-table history-table--muted">
                 <table>
                   <tbody>
-                    <tr>
-                      <td>№ ТД-Р-126 от 13.09.2022</td>
-                      <td>Тут комментарий может отображаться в несколько строк, если много текста нужно оставить</td>
-                      <td>
-                        <a class="document-link" href="#">
-                          <img :src="openIcon" alt="" aria-hidden="true" />
-                          открыть
-                        </a>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>№ ТД-Р-85 от 05.05.2020</td>
-                      <td>Тут комментарий может отображаться в несколько строк, если много текста нужно оставить</td>
-                      <td>
-                        <a class="document-link" href="#">
-                          <img :src="openIcon" alt="" aria-hidden="true" />
-                          открыть
-                        </a>
-                      </td>
+                    <tr v-for="row in systemHistoryRows.slice(1)" :key="`history-${row.id}`">
+                      <td>{{ row.orderName }}</td>
+                      <td :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</td>
+                      <td class="document-empty-cell">—</td>
                     </tr>
                   </tbody>
                 </table>

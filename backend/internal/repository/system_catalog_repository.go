@@ -28,13 +28,41 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 		}
 	}()
 
+	type documentState struct {
+		comment            string
+		comparisonSelected bool
+	}
+	documentStates := make(map[string]documentState)
+	existing, queryErr := tx.QueryContext(ctx, `
+		SELECT s.code, s.system_name, d.comment, d.comparison_selected
+		FROM system_documents d
+		JOIN system_catalog s ON s.id = d.system_catalog_id
+		WHERE d.order_id = $1
+	`, orderID)
+	if queryErr != nil {
+		return fmt.Errorf("load system document comments before catalog import: %w", queryErr)
+	}
+	for existing.Next() {
+		var code, name string
+		var state documentState
+		if err = existing.Scan(&code, &name, &state.comment, &state.comparisonSelected); err != nil {
+			existing.Close()
+			return fmt.Errorf("scan preserved system document comment: %w", err)
+		}
+		documentStates[code+"\x00"+name] = state
+	}
+	if err = existing.Close(); err != nil {
+		return fmt.Errorf("close preserved system document comments: %w", err)
+	}
+
 	if _, err = tx.ExecContext(ctx, `DELETE FROM system_catalog WHERE order_id = $1`, orderID); err != nil {
 		return fmt.Errorf("clear system catalog: %w", err)
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO system_catalog (order_id, position, code, system_name, system_url, system_class, curator)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO system_catalog (order_id, position, code, system_name, system_url, system_class, curator, document_initialized)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
+		RETURNING id
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare system catalog insert: %w", err)
@@ -42,8 +70,16 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 	defer stmt.Close()
 
 	for _, row := range rows {
-		if _, err = stmt.ExecContext(ctx, orderID, row.Position, row.Code, row.SystemName, row.SystemURL, row.SystemClass, row.Curator); err != nil {
+		state := documentStates[row.Code+"\x00"+row.SystemName]
+		var systemCatalogID int64
+		if err = stmt.QueryRowContext(ctx, orderID, row.Position, row.Code, row.SystemName, row.SystemURL, row.SystemClass, row.Curator).Scan(&systemCatalogID); err != nil {
 			return fmt.Errorf("insert system catalog row %q: %w", row.Code, err)
+		}
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO system_documents (order_id, system_catalog_id, comment, comparison_selected)
+			VALUES ($1, $2, $3, $4)
+		`, orderID, systemCatalogID, state.comment, state.comparisonSelected); err != nil {
+			return fmt.Errorf("insert system document row %q: %w", row.Code, err)
 		}
 	}
 

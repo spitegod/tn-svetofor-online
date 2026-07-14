@@ -107,6 +107,31 @@ ALTER TABLE system_catalog ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEF
 
 CREATE INDEX IF NOT EXISTS idx_classification_changes_order_id ON classification_changes(order_id);
 CREATE INDEX IF NOT EXISTS idx_system_catalog_order_id ON system_catalog(order_id);
+
+CREATE TABLE IF NOT EXISTS system_documents (
+	id BIGSERIAL PRIMARY KEY,
+	order_id BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+	system_catalog_id BIGINT NOT NULL REFERENCES system_catalog(id) ON DELETE CASCADE,
+	comment TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	UNIQUE (system_catalog_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_documents_order_id ON system_documents(order_id);
+CREATE INDEX IF NOT EXISTS idx_system_documents_catalog_id ON system_documents(system_catalog_id);
+
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS comparison_selected BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE system_catalog ADD COLUMN IF NOT EXISTS document_initialized BOOLEAN NOT NULL DEFAULT FALSE;
+
+INSERT INTO system_documents (order_id, system_catalog_id)
+SELECT s.order_id, s.id
+FROM system_catalog s
+WHERE NOT s.document_initialized AND NOT EXISTS (
+	SELECT 1 FROM system_documents d WHERE d.system_catalog_id = s.id
+);
+
+UPDATE system_catalog SET document_initialized = TRUE WHERE NOT document_initialized;
 `
 
 	if _, err := database.ExecContext(ctx, ordersQuery); err != nil {

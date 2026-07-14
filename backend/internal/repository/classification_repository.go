@@ -115,13 +115,45 @@ func (r *ClassificationRepository) List(ctx context.Context, filter model.Classi
 
 func (r *ClassificationRepository) Stats(ctx context.Context, orderID int64) (model.ClassificationStats, error) {
 	const query = `
+		WITH current_order AS (
+			SELECT id, created_at
+			FROM orders
+			WHERE id = $1
+		),
+		previous_order AS (
+			SELECT candidate.id
+			FROM orders candidate
+			CROSS JOIN current_order current
+			WHERE candidate.created_at < current.created_at
+				OR (candidate.created_at = current.created_at AND candidate.id < current.id)
+			ORDER BY candidate.created_at DESC, candidate.id DESC
+			LIMIT 1
+		),
+		current_systems AS (
+			SELECT DISTINCT ON (LOWER(TRIM(system_name)))
+				LOWER(TRIM(system_name)) AS system_key,
+				class_before,
+				class_after
+			FROM classification_changes
+			WHERE order_id = $1
+			ORDER BY LOWER(TRIM(system_name)), position DESC, id DESC
+		),
+		previous_systems AS (
+			SELECT DISTINCT LOWER(TRIM(change.system_name)) AS system_key
+			FROM classification_changes change
+			WHERE change.order_id = (SELECT id FROM previous_order)
+		),
+		compared AS (
+			SELECT current.*, previous.system_key IS NULL AS is_new
+			FROM current_systems current
+			LEFT JOIN previous_systems previous USING (system_key)
+		)
 		SELECT
-			COUNT(*) FILTER (WHERE class_before = 'Новая система') AS added_systems,
+			COUNT(*) FILTER (WHERE is_new) AS added_systems,
 			COUNT(*) FILTER (WHERE class_after = 'Рекомендованная') AS recommended,
 			COUNT(*) FILTER (WHERE class_after = 'Разрешенная') AS allowed,
 			COUNT(*) FILTER (WHERE class_before <> 'Новая система') AS classification_changes
-		FROM classification_changes
-		WHERE ($1::BIGINT = 0 OR order_id = $1)
+		FROM compared
 	`
 
 	var stats model.ClassificationStats

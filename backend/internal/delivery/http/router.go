@@ -12,14 +12,15 @@ import (
 )
 
 type Router struct {
-	classification *service.ClassificationService
-	systemCatalog  *service.SystemCatalogService
-	orders         *service.OrderService
-	navParser      *service.NavParserService
+	classification  *service.ClassificationService
+	systemCatalog   *service.SystemCatalogService
+	systemDocuments *service.SystemDocumentService
+	orders          *service.OrderService
+	navParser       *service.NavParserService
 }
 
-func NewRouter(classification *service.ClassificationService, systemCatalog *service.SystemCatalogService, orders *service.OrderService, navParser *service.NavParserService) http.Handler {
-	router := &Router{classification: classification, systemCatalog: systemCatalog, orders: orders, navParser: navParser}
+func NewRouter(classification *service.ClassificationService, systemCatalog *service.SystemCatalogService, systemDocuments *service.SystemDocumentService, orders *service.OrderService, navParser *service.NavParserService) http.Handler {
+	router := &Router{classification: classification, systemCatalog: systemCatalog, systemDocuments: systemDocuments, orders: orders, navParser: navParser}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", health)
@@ -34,8 +35,116 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("POST /api/system-catalog/import", router.importSystemCatalog)
 	mux.HandleFunc("GET /api/system-catalog/export", router.exportSystemCatalog)
 	mux.HandleFunc("POST /api/system-catalog/parse-nav", router.parseNavSystemCatalog)
+	mux.HandleFunc("GET /api/system-documents", router.listSystemDocuments)
+	mux.HandleFunc("GET /api/system-documents/export", router.exportSystemDocuments)
+	mux.HandleFunc("GET /api/system-documents/history", router.systemDocumentHistory)
+	mux.HandleFunc("PATCH /api/system-documents/{id}", router.updateSystemDocument)
+	mux.HandleFunc("PATCH /api/system-documents/{id}/comparison", router.updateSystemDocumentComparison)
+	mux.HandleFunc("PATCH /api/system-documents/comparison", router.updateSystemDocumentComparisonBulk)
+	mux.HandleFunc("DELETE /api/system-documents/{id}", router.deleteSystemDocument)
 
 	return mux
+}
+
+func (r *Router) listSystemDocuments(w http.ResponseWriter, request *http.Request) {
+	payload, err := r.systemDocuments.List(request.Context(), systemDocumentFilterFromRequest(request))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (r *Router) exportSystemDocuments(w http.ResponseWriter, request *http.Request) {
+	payload, err := r.systemDocuments.Export(request.Context(), systemDocumentFilterFromRequest(request))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", `attachment; filename="system-documents.xlsx"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(payload)
+}
+
+func (r *Router) systemDocumentHistory(w http.ResponseWriter, request *http.Request) {
+	payload, err := r.systemDocuments.History(request.Context(), request.URL.Query().Get("code"), request.URL.Query().Get("systemName"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (r *Router) updateSystemDocument(w http.ResponseWriter, request *http.Request) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
+		return
+	}
+	var payload struct {
+		Comment string `json:"comment"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode system document: %w", err))
+		return
+	}
+	row, err := r.systemDocuments.UpdateComment(request.Context(), id, orderIDFromRequest(request), payload.Comment)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
+func (r *Router) deleteSystemDocument(w http.ResponseWriter, request *http.Request) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
+		return
+	}
+	if err := r.systemDocuments.Delete(request.Context(), id, orderIDFromRequest(request)); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Router) updateSystemDocumentComparison(w http.ResponseWriter, request *http.Request) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
+		return
+	}
+	var payload struct {
+		Selected bool `json:"selected"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode comparison selection: %w", err))
+		return
+	}
+	if err := r.systemDocuments.UpdateComparison(request.Context(), id, orderIDFromRequest(request), payload.Selected); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Router) updateSystemDocumentComparisonBulk(w http.ResponseWriter, request *http.Request) {
+	var payload struct {
+		Selected  bool                      `json:"selected"`
+		AllOrders bool                      `json:"allOrders"`
+		Systems   []model.SystemDocumentKey `json:"systems"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode bulk comparison selection: %w", err))
+		return
+	}
+	if err := r.systemDocuments.UpdateComparisonBulk(request.Context(), orderIDFromRequest(request), payload.AllOrders, payload.Selected, payload.Systems); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (r *Router) parseNavSystemCatalog(w http.ResponseWriter, request *http.Request) {
@@ -250,6 +359,24 @@ func systemCatalogFilterFromRequest(request *http.Request) model.SystemCatalogFi
 	return filter
 }
 
+func systemDocumentFilterFromRequest(request *http.Request) model.SystemDocumentFilter {
+	query := request.URL.Query()
+	filter := model.SystemDocumentFilter{
+		OrderID:        orderIDFromRequest(request),
+		Query:          query.Get("q"),
+		SystemClass:    query.Get("class"),
+		Curator:        query.Get("curator"),
+		ComparisonOnly: query.Get("comparison") == "true",
+	}
+	if filter.SystemClass == "Все" {
+		filter.SystemClass = ""
+	}
+	if filter.Curator == "Все" || filter.Curator == "Все кураторы" {
+		filter.Curator = ""
+	}
+	return filter
+}
+
 func orderIDFromRequest(request *http.Request) int64 {
 	value := request.URL.Query().Get("orderId")
 	if value == "" {
@@ -268,7 +395,7 @@ func orderIDFromRequest(request *http.Request) int64 {
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
