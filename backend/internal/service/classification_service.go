@@ -25,6 +25,8 @@ type ClassificationService struct {
 	httpClient *http.Client
 }
 
+const unassignedConstructionType = "Тип не присвоен"
+
 func NewClassificationService(repo *repository.ClassificationRepository) *ClassificationService {
 	return &ClassificationService{
 		repo: repo,
@@ -98,10 +100,11 @@ func (s *ClassificationService) Import(ctx context.Context, orderID int64, file 
 		}
 
 		rows = append(rows, model.ClassificationChange{
-			Position:    len(rows) + 1,
-			SystemName:  systemName,
-			ClassBefore: classBefore,
-			ClassAfter:  classAfter,
+			Position:         len(rows) + 1,
+			SystemName:       systemName,
+			ConstructionType: unassignedConstructionType,
+			ClassBefore:      classBefore,
+			ClassAfter:       classAfter,
 		})
 	}
 
@@ -222,38 +225,38 @@ func (s *ClassificationService) resolveSystemURLs(ctx context.Context, rows []mo
 				return
 			}
 
-			rows[rowIndex].SystemURL = s.resolveSystemURL(ctx, rows[rowIndex].SystemName)
+			rows[rowIndex].SystemURL, rows[rowIndex].ConstructionType = s.resolveSystemData(ctx, rows[rowIndex].SystemName)
 		}(index)
 	}
 
 	wg.Wait()
 }
 
-func (s *ClassificationService) resolveSystemURL(ctx context.Context, systemName string) string {
+func (s *ClassificationService) resolveSystemData(ctx context.Context, systemName string) (string, string) {
 	searchURL := "https://nav.tn.ru/search/?q=" + url.QueryEscape(systemName)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
 	if err != nil {
-		return ""
+		return "", unassignedConstructionType
 	}
 
 	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 	response, err := s.httpClient.Do(request)
 	if err != nil {
-		return ""
+		return "", unassignedConstructionType
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
-		return ""
+		return "", unassignedConstructionType
 	}
 
-	return systemURLFromSearch(response.Body, systemName)
+	return systemDataFromSearch(response.Body, systemName)
 }
 
-func systemURLFromSearch(body io.Reader, systemName string) string {
+func systemDataFromSearch(body io.Reader, systemName string) (string, string) {
 	document, err := html.Parse(io.LimitReader(body, 2*1024*1024))
 	if err != nil {
-		return ""
+		return "", unassignedConstructionType
 	}
 
 	wantedName := normalizeSystemName(systemName)
@@ -276,8 +279,39 @@ func systemURLFromSearch(body io.Reader, systemName string) string {
 
 		absolute.RawQuery = ""
 		absolute.Fragment = ""
-		return absolute.String()
+
+		constructionType := unassignedConstructionType
+		for parent := anchor.Parent; parent != nil; parent = parent.Parent {
+			if parent.Type != html.ElementNode || !hasClass(parent, "b-search-teaser") {
+				continue
+			}
+			segment := findNode(parent, func(node *html.Node) bool {
+				return node.Type == html.ElementNode && hasClass(node, "b-search-teaser__constr_segment")
+			})
+			if segment != nil {
+				constructionType = normalizeConstructionType(nodeText(segment))
+			}
+			break
+		}
+
+		return absolute.String(), constructionType
 	}
 
-	return ""
+	return "", unassignedConstructionType
+}
+
+func normalizeConstructionType(value string) string {
+	normalized := normalizeSystemName(value)
+	switch {
+	case normalized == "пгс" || strings.Contains(normalized, "промышлен") || strings.Contains(normalized, "гражданск"):
+		return "Промышленное и гражданское строительство"
+	case normalized == "ижс" || strings.Contains(normalized, "индивидуальн") || strings.Contains(normalized, "жилищн"):
+		return "Индивидуальное жилищное строительство"
+	case strings.Contains(normalized, "транспорт") || strings.Contains(normalized, "дорож"):
+		return "Транспортное и дорожное строительство"
+	case strings.Contains(normalized, "специальн") || strings.Contains(normalized, "спецсооруж"):
+		return "Специальные сооружения"
+	default:
+		return unassignedConstructionType
+	}
 }

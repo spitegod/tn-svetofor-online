@@ -102,8 +102,9 @@ WHERE id = 1;
 
 SELECT setval(pg_get_serial_sequence('orders', 'id'), GREATEST((SELECT MAX(id) FROM orders), 1), true);
 
-ALTER TABLE classification_changes ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEFAULT 1;
-ALTER TABLE system_catalog ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEFAULT 1;
+	ALTER TABLE classification_changes ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEFAULT 1;
+	ALTER TABLE classification_changes ADD COLUMN IF NOT EXISTS construction_type TEXT NOT NULL DEFAULT 'Тип не присвоен';
+	ALTER TABLE system_catalog ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEFAULT 1;
 
 CREATE INDEX IF NOT EXISTS idx_classification_changes_order_id ON classification_changes(order_id);
 CREATE INDEX IF NOT EXISTS idx_system_catalog_order_id ON system_catalog(order_id);

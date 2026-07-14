@@ -33,8 +33,8 @@ func (r *ClassificationRepository) ReplaceAll(ctx context.Context, orderID int64
 	}
 
 	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO classification_changes (order_id, position, system_name, system_url, class_before, class_after)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO classification_changes (order_id, position, system_name, system_url, construction_type, class_before, class_after)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare classification insert: %w", err)
@@ -42,7 +42,7 @@ func (r *ClassificationRepository) ReplaceAll(ctx context.Context, orderID int64
 	defer stmt.Close()
 
 	for _, row := range rows {
-		if _, err = stmt.ExecContext(ctx, orderID, row.Position, row.SystemName, row.SystemURL, row.ClassBefore, row.ClassAfter); err != nil {
+		if _, err = stmt.ExecContext(ctx, orderID, row.Position, row.SystemName, row.SystemURL, row.ConstructionType, row.ClassBefore, row.ClassAfter); err != nil {
 			return fmt.Errorf("insert classification change %q: %w", row.SystemName, err)
 		}
 	}
@@ -83,7 +83,7 @@ func (r *ClassificationRepository) List(ctx context.Context, filter model.Classi
 	}
 
 	query := `
-		SELECT id, order_id, position, system_name, system_url, class_before, class_after, imported_at
+		SELECT id, order_id, position, system_name, system_url, construction_type, class_before, class_after, imported_at
 		FROM classification_changes
 	`
 	if len(clauses) > 0 {
@@ -100,7 +100,7 @@ func (r *ClassificationRepository) List(ctx context.Context, filter model.Classi
 	rows := make([]model.ClassificationChange, 0)
 	for result.Next() {
 		var row model.ClassificationChange
-		if err := result.Scan(&row.ID, &row.OrderID, &row.Position, &row.SystemName, &row.SystemURL, &row.ClassBefore, &row.ClassAfter, &row.ImportedAt); err != nil {
+		if err := result.Scan(&row.ID, &row.OrderID, &row.Position, &row.SystemName, &row.SystemURL, &row.ConstructionType, &row.ClassBefore, &row.ClassAfter, &row.ImportedAt); err != nil {
 			return nil, fmt.Errorf("scan classification change: %w", err)
 		}
 		rows = append(rows, row)

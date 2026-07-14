@@ -928,6 +928,14 @@ button:disabled {
   outline: 0;
 }
 
+.construction-type-status {
+  display: block;
+  margin-top: 5px;
+  color: #8a94a3;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .systems-table thead tr:first-child th:nth-child(2),
 .systems-table thead tr:nth-child(2) th {
   text-align: center;

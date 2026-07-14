@@ -11,6 +11,7 @@ type ClassificationChange = {
   position: number
   systemName: string
   systemUrl: string
+  constructionType: string
   classBefore: string
   classAfter: string
   importedAt: string
@@ -696,7 +697,11 @@ async function exportClassificationTable() {
 }
 
 function currentClassificationRows() {
-  return classificationRows.value
+  if (selectedConstructionType.value === 'Все') {
+    return classificationRows.value
+  }
+
+  return classificationRows.value.filter((row) => row.constructionType === selectedConstructionType.value)
 }
 
 function buildSystemCatalogQuery() {
@@ -1400,8 +1405,9 @@ onBeforeUnmount(() => {
               v-for="type in constructionTypes"
               :key="type"
               class="type-tab"
-              :class="{ 'type-tab--active': type === 'Промышленное и гражданское строительство' }"
+              :class="{ 'type-tab--active': type === selectedConstructionType }"
               type="button"
+              @click="selectConstructionType(type)"
             >
               {{ type }}
             </button>
@@ -1483,6 +1489,7 @@ onBeforeUnmount(() => {
                     {{ row.systemName }}
                   </a>
                   <span v-else>{{ row.systemName }}</span>
+                  <small v-if="row.constructionType === 'Тип не присвоен'" class="construction-type-status">Тип не присвоен</small>
                 </td>
                 <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
                   {{ row.classBefore }}
