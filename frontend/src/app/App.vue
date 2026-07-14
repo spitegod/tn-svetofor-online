@@ -197,6 +197,12 @@ const classificationConstructionTypes = computed(() => [...constructionTypes, '�
 })))
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
+const systemDocumentPageSize = ref('20')
+const systemDocumentPage = ref(1)
+const systemsConstructionTypes = computed(() => constructionTypes.map((name) => ({
+  name,
+  count: systemDocumentRows.value.filter((system) => systemMatchesConstructionType(system, name)).length,
+})))
 const documentRows = ref<SystemDocumentRow[]>([])
 const documentSearch = ref('')
 const documentError = ref('')
@@ -1012,6 +1018,50 @@ function currentSystemDocumentRows() {
   return filteredSystemDocumentRows.value
 }
 
+function visibleSystemDocumentRows() {
+  const rows = currentSystemDocumentRows()
+  if (systemDocumentPageSize.value === 'all') {
+    return rows
+  }
+  const pageSize = Number(systemDocumentPageSize.value)
+  const start = (systemDocumentPage.value - 1) * pageSize
+  return rows.slice(start, start + pageSize)
+}
+
+function systemDocumentPageCount() {
+  if (systemDocumentPageSize.value === 'all') {
+    return 1
+  }
+  return Math.max(1, Math.ceil(currentSystemDocumentRows().length / Number(systemDocumentPageSize.value)))
+}
+
+function systemDocumentRangeStart() {
+  if (currentSystemDocumentRows().length === 0) return 0
+  if (systemDocumentPageSize.value === 'all') return 1
+  return (systemDocumentPage.value - 1) * Number(systemDocumentPageSize.value) + 1
+}
+
+function systemDocumentRangeEnd() {
+  if (systemDocumentPageSize.value === 'all') return currentSystemDocumentRows().length
+  return Math.min(systemDocumentPage.value * Number(systemDocumentPageSize.value), currentSystemDocumentRows().length)
+}
+
+function changeSystemDocumentPageSize() {
+  systemDocumentPage.value = 1
+}
+
+async function changeSystemDocumentPage(nextPage: number) {
+  systemDocumentPage.value = Math.min(Math.max(nextPage, 1), systemDocumentPageCount())
+  await nextTick()
+
+  const table = document.querySelector<HTMLElement>('.systems-table--catalog')
+  table?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+  table?.querySelector<HTMLElement>('tbody tr')?.focus({ preventScroll: true })
+}
+
 function setPage(page: string) {
   activePage.value = page
   openedSelect.value = null
@@ -1037,11 +1087,15 @@ function toggleComparisonMenu(orderId: number) {
   openedComparisonMenu.value = openedComparisonMenu.value === orderId ? null : orderId
 }
 
-function matchesConstructionType(system: { characteristics?: SystemCharacteristic[] }) {
-  return selectedConstructionType.value === 'Все' ||
+function systemMatchesConstructionType(system: { characteristics?: SystemCharacteristic[] }, constructionType: string) {
+  return constructionType === 'Все' ||
     system.characteristics?.some((characteristic) =>
-      characteristic.name === 'Сегмент строительства' && characteristic.value.includes(selectedConstructionType.value),
+      characteristic.name === 'Сегмент строительства' && characteristic.value.includes(constructionType),
     )
+}
+
+function matchesConstructionType(system: { characteristics?: SystemCharacteristic[] }) {
+  return systemMatchesConstructionType(system, selectedConstructionType.value)
 }
 
 function matchesSystemType(system: { characteristics?: SystemCharacteristic[] }, type: SystemTypeOption) {
@@ -1052,12 +1106,14 @@ function matchesSystemType(system: { characteristics?: SystemCharacteristic[] },
 
 function selectSystemType(type: SystemTypeOption) {
   selectedSystemTypeSlug.value = type.slug
+  systemDocumentPage.value = 1
   openedClassificationSystemId.value = null
   clearClassificationFilters()
 }
 
 function selectConstructionType(type: string) {
   selectedConstructionType.value = type
+  systemDocumentPage.value = 1
   selectedSystemTypeSlug.value = ''
   openedClassificationSystemId.value = null
   clearClassificationFilters()
@@ -1126,6 +1182,7 @@ function classificationRowPositions() {
 
 function applySystemDocumentPayload(payload: SystemDocumentResponse) {
   systemDocumentRows.value = payload.rows
+  systemDocumentPage.value = 1
   systemCatalogStats.value = payload.stats
   systemCatalogClassOptions.value = payload.classOptions.length > 1 ? payload.classOptions : ['Все', ...classOptions]
   systemCatalogCuratorOptions.value = payload.curatorOptions.length > 1
@@ -1133,8 +1190,10 @@ function applySystemDocumentPayload(payload: SystemDocumentResponse) {
     : ['Все кураторы']
 }
 
-async function loadSystemDocuments() {
-  isSystemCatalogLoading.value = true
+async function loadSystemDocuments(silent = false) {
+  if (!silent) {
+    isSystemCatalogLoading.value = true
+  }
   systemCatalogError.value = ''
   try {
     const query = buildSystemCatalogQuery()
@@ -1146,7 +1205,9 @@ async function loadSystemDocuments() {
   } catch (error) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить список систем'
   } finally {
-    isSystemCatalogLoading.value = false
+    if (!silent) {
+      isSystemCatalogLoading.value = false
+    }
   }
 }
 
@@ -1156,7 +1217,7 @@ function scheduleSystemDocumentSearch() {
   }
   systemDocumentSearchTimer = window.setTimeout(() => {
     systemDocumentSearchTimer = null
-    loadSystemDocuments()
+    loadSystemDocuments(true)
   }, 250)
 }
 
@@ -1732,16 +1793,17 @@ onBeforeUnmount(() => {
         <div class="systems-tools">
           <section class="filter-panel" aria-label="Тип строительства">
             <h2>Тип строительства</h2>
-            <div class="type-tabs">
+            <div class="type-tabs type-tabs--changes type-tabs--systems">
               <button
-                v-for="type in constructionTypes"
-                :key="type"
+                v-for="type in systemsConstructionTypes"
+                :key="type.name"
                 class="type-tab"
-                :class="{ 'type-tab--active': type === selectedConstructionType }"
+                :class="{ 'type-tab--active': type.name === selectedConstructionType }"
                 type="button"
-                @click="selectConstructionType(type)"
+                @click="selectConstructionType(type.name)"
               >
-                {{ type }}
+                <span>{{ type.name }}</span>
+                <strong>{{ type.count }}</strong>
               </button>
             </div>
           </section>
@@ -1761,11 +1823,6 @@ onBeforeUnmount(() => {
 
           <Transition name="system-type-body">
             <div v-if="isSystemTypesOpen" class="system-type-body">
-              <label class="search-field">
-                <span>Поиск</span>
-                <input v-model="systemCatalogSearch" type="search" placeholder="Поиск по названию или ЕКН" @input="scheduleSystemDocumentSearch" />
-              </label>
-
               <div class="system-type-grid">
                 <button
                   v-for="type in systemTypes"
@@ -1784,6 +1841,11 @@ onBeforeUnmount(() => {
         </section>
 
         <section class="table-toolbar systems-table-toolbar" aria-label="Управление таблицей">
+          <label class="search-field systems-name-search">
+            <span>Поиск системы</span>
+            <input v-model="systemCatalogSearch" type="search" placeholder="Введите название системы" @input="scheduleSystemDocumentSearch" />
+          </label>
+
           <div class="select-field">
             <span>Класс</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'class' }">
@@ -1832,7 +1894,18 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <div class="comparison-bulk-controls" aria-label="Массовый выбор для сравнения">
+          <button class="export-button" type="button" @click="exportSystemCatalog">Экспортировать таблицу</button>
+        </section>
+
+        <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
+        <p v-else-if="isSystemCatalogLoading" class="table-message">Загрузка таблицы...</p>
+
+        <section class="comparison-table-controls" aria-label="Управление выбором для сравнения">
+          <div class="comparison-table-controls__heading">
+            <strong>Добавление в сравнение</strong>
+            <span>Отметьте нужные системы в таблице</span>
+          </div>
+          <div class="comparison-table-controls__actions">
             <label class="toolbar-checkbox" :class="{ 'is-partial': someVisibleSystemsSelected }">
               <input
                 type="checkbox"
@@ -1843,20 +1916,27 @@ onBeforeUnmount(() => {
               <span aria-hidden="true" />
               <strong>Выбрать все</strong>
             </label>
-            <label class="toolbar-checkbox">
-              <input v-model="comparisonAllOrders" type="checkbox" :disabled="isBulkComparisonUpdating" />
-              <span aria-hidden="true" />
-              <strong>Все распоряжения</strong>
-            </label>
+            <div class="custom-select" :class="{ 'is-open': openedSelect === 'comparison-scope' }">
+              <button class="custom-select__button" type="button" aria-label="Область применения выбора" :disabled="isBulkComparisonUpdating" @click.stop="toggleSelect('comparison-scope')">
+                <span>{{ comparisonAllOrders ? 'Все распоряжения' : 'Текущее распоряжение' }}</span>
+                <i aria-hidden="true" />
+              </button>
+              <Transition name="select-menu">
+                <div v-if="openedSelect === 'comparison-scope'" class="custom-select__menu">
+                  <button class="custom-select__option" :class="{ 'is-selected': !comparisonAllOrders }" type="button" @click="comparisonAllOrders = false; openedSelect = null">
+                    Текущее распоряжение
+                  </button>
+                  <button class="custom-select__option" :class="{ 'is-selected': comparisonAllOrders }" type="button" @click="comparisonAllOrders = true; openedSelect = null">
+                    Все распоряжения
+                  </button>
+                </div>
+              </Transition>
+            </div>
           </div>
 
-          <button class="export-button" type="button" @click="exportSystemCatalog">Экспортировать таблицу</button>
         </section>
 
-        <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
-        <p v-else-if="isSystemCatalogLoading" class="table-message">Загрузка таблицы...</p>
-
-        <div class="systems-table systems-table--scroll">
+        <div class="systems-table systems-table--catalog">
           <table>
             <thead>
               <tr>
@@ -1871,7 +1951,7 @@ onBeforeUnmount(() => {
               <tr v-if="currentSystemDocumentRows().length === 0">
                 <td class="empty-table-cell" colspan="5">В таблице 3 этого распоряжения пока нет систем</td>
               </tr>
-              <tr v-for="row in currentSystemDocumentRows()" :key="row.id">
+              <tr v-for="row in visibleSystemDocumentRows()" :key="row.id" tabindex="-1">
                 <td>{{ row.code }}</td>
                 <td>
                   <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
@@ -1904,6 +1984,28 @@ onBeforeUnmount(() => {
             </tbody>
           </table>
         </div>
+
+        <footer v-if="currentSystemDocumentRows().length > 0" class="table-pagination">
+          <span class="table-pagination__range">
+            Показано {{ systemDocumentRangeStart() }}–{{ systemDocumentRangeEnd() }} из {{ currentSystemDocumentRows().length }}
+          </span>
+          <div class="table-pagination__controls">
+            <label>
+              <span>Строк на странице</span>
+              <select v-model="systemDocumentPageSize" @change="changeSystemDocumentPageSize">
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
+            <div v-if="systemDocumentPageSize !== 'all'" class="table-pagination__pages">
+              <button type="button" :disabled="systemDocumentPage === 1" aria-label="Предыдущая страница" @click="changeSystemDocumentPage(systemDocumentPage - 1)">‹</button>
+              <strong>{{ systemDocumentPage }} / {{ systemDocumentPageCount() }}</strong>
+              <button type="button" :disabled="systemDocumentPage >= systemDocumentPageCount()" aria-label="Следующая страница" @click="changeSystemDocumentPage(systemDocumentPage + 1)">›</button>
+            </div>
+          </div>
+        </footer>
 
       </section>
 
@@ -2566,7 +2668,7 @@ onBeforeUnmount(() => {
 
     <Transition name="scroll-top">
       <button
-        v-if="activePage === 'changes' && isScrollTopVisible"
+        v-if="(activePage === 'changes' || activePage === 'systems') && isScrollTopVisible"
         class="scroll-top-button"
         type="button"
         aria-label="Вернуться в начало страницы"

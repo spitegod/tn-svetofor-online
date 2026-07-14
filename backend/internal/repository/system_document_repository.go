@@ -22,7 +22,7 @@ func (r *SystemDocumentRepository) List(ctx context.Context, filter model.System
 	args := []any{filter.OrderID}
 	if filter.Query != "" {
 		args = append(args, "%"+strings.ToLower(filter.Query)+"%")
-		clauses = append(clauses, fmt.Sprintf("(LOWER(s.system_name) LIKE $%d OR LOWER(s.code) LIKE $%d)", len(args), len(args)))
+		clauses = append(clauses, fmt.Sprintf("LOWER(s.system_name) LIKE $%d", len(args)))
 	}
 	if filter.SystemClass != "" {
 		args = append(args, filter.SystemClass)
