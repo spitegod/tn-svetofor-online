@@ -29,9 +29,11 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("PATCH /api/orders/{id}", router.updateOrder)
 	mux.HandleFunc("DELETE /api/orders/{id}", router.deleteOrder)
 	mux.HandleFunc("GET /api/classification-changes", router.listClassificationChanges)
+	mux.HandleFunc("PATCH /api/classification-changes/{id}", router.updateClassificationChange)
 	mux.HandleFunc("POST /api/classification-changes/import", router.importClassificationChanges)
 	mux.HandleFunc("GET /api/classification-changes/export", router.exportClassificationChanges)
 	mux.HandleFunc("GET /api/system-catalog", router.listSystemCatalog)
+	mux.HandleFunc("PATCH /api/system-catalog/{id}", router.updateSystemCatalogRow)
 	mux.HandleFunc("POST /api/system-catalog/import", router.importSystemCatalog)
 	mux.HandleFunc("GET /api/system-catalog/export", router.exportSystemCatalog)
 	mux.HandleFunc("POST /api/system-catalog/parse-nav", router.parseNavSystemCatalog)
@@ -241,6 +243,25 @@ func (r *Router) listClassificationChanges(w http.ResponseWriter, request *http.
 	writeJSON(w, http.StatusOK, payload)
 }
 
+func (r *Router) updateClassificationChange(w http.ResponseWriter, request *http.Request) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid classification change id: %w", err))
+		return
+	}
+	var payload model.ClassificationChange
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode classification change: %w", err))
+		return
+	}
+	row, err := r.classification.Update(request.Context(), id, orderIDFromRequest(request), payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
+}
+
 func (r *Router) importClassificationChanges(w http.ResponseWriter, request *http.Request) {
 	if err := request.ParseMultipartForm(32 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("parse multipart form: %w", err))
@@ -284,6 +305,25 @@ func (r *Router) listSystemCatalog(w http.ResponseWriter, request *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, payload)
+}
+
+func (r *Router) updateSystemCatalogRow(w http.ResponseWriter, request *http.Request) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system catalog row id: %w", err))
+		return
+	}
+	var payload model.SystemCatalogRow
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode system catalog row: %w", err))
+		return
+	}
+	row, err := r.systemCatalog.Update(request.Context(), id, orderIDFromRequest(request), payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, row)
 }
 
 func (r *Router) importSystemCatalog(w http.ResponseWriter, request *http.Request) {

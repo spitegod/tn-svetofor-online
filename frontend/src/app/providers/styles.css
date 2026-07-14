@@ -669,8 +669,23 @@ button:disabled {
 }
 
 .systems-table-toolbar {
-  grid-template-columns: minmax(210px, 280px) minmax(210px, 280px) minmax(300px, 1fr) auto;
-  justify-content: space-between;
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+}
+
+.systems-table-toolbar > .select-field {
+  width: clamp(190px, 22vw, 280px);
+  flex: 0 1 280px;
+}
+
+.systems-table-toolbar .comparison-bulk-controls {
+  margin-left: auto;
+}
+
+.systems-table-toolbar .export-button {
+  flex: 0 0 auto;
 }
 
 .comparison-bulk-controls {
@@ -2082,6 +2097,17 @@ button:disabled {
   width: 100%;
 }
 
+.settings-table-scroll {
+  max-height: 540px;
+  overflow: auto;
+}
+
+.settings-table-scroll thead {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
 .settings-data-table table,
 .settings-docs-table table {
   min-width: 960px;
@@ -2103,6 +2129,46 @@ button:disabled {
 .settings-data-table th:first-child,
 .settings-data-table td:first-child {
   text-align: left;
+}
+
+.settings-cell-input,
+.settings-cell-select {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 6px 8px;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.settings-cell-select {
+  cursor: pointer;
+  padding-right: 28px;
+}
+
+.settings-cell-select option {
+  background: #ffffff;
+  color: var(--tn-ink);
+}
+
+.settings-cell-input:hover,
+.settings-cell-select:hover {
+  border-color: rgba(122, 133, 148, 0.34);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.settings-cell-input:focus,
+.settings-cell-select:focus {
+  border-color: #98a6b8;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(57, 115, 173, 0.1);
+  color: var(--tn-ink);
+  outline: 0;
 }
 
 .settings-docs-table td {
@@ -2592,6 +2658,21 @@ button:disabled {
   .table-toolbar {
     grid-template-columns: 1fr;
     gap: 14px;
+  }
+
+  .systems-table-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .systems-table-toolbar > .select-field {
+    width: 100%;
+    flex: 0 0 auto;
+  }
+
+  .systems-table-toolbar .comparison-bulk-controls {
+    margin-left: 0;
+    justify-content: flex-start;
   }
 
   .classification-topline,

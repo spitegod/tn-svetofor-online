@@ -109,6 +109,23 @@ func (s *SystemCatalogService) Import(ctx context.Context, orderID int64, file i
 	return s.List(ctx, model.SystemCatalogFilter{OrderID: orderID})
 }
 
+func (s *SystemCatalogService) Update(ctx context.Context, id int64, orderID int64, row model.SystemCatalogRow) (model.SystemCatalogRow, error) {
+	if id <= 0 || orderID <= 0 {
+		return model.SystemCatalogRow{}, fmt.Errorf("invalid system catalog row")
+	}
+	row.Code = normalizeCell(row.Code)
+	row.SystemName = normalizeCell(row.SystemName)
+	row.SystemClass = normalizeStatus(row.SystemClass)
+	row.Curator = normalizeCell(row.Curator)
+	if row.Code == "" || row.SystemName == "" {
+		return model.SystemCatalogRow{}, fmt.Errorf("code and system name cannot be empty")
+	}
+	if !validStatus(row.SystemClass, false) {
+		return model.SystemCatalogRow{}, fmt.Errorf("invalid system class")
+	}
+	return s.repo.Update(ctx, id, orderID, row)
+}
+
 func (s *SystemCatalogService) Export(ctx context.Context, filter model.SystemCatalogFilter) ([]byte, error) {
 	rows, err := s.repo.List(ctx, filter)
 	if err != nil {
