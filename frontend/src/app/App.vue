@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import logo from '@/shared/assets/logo.png'
 import folderIcon from '@/shared/assets/folder.png'
 import openIcon from '@/shared/assets/open.png'
@@ -113,7 +113,7 @@ const constructionTypes = [
   'Транспортное и дорожное строительство',
   'Специальные сооружения',
 ]
-const selectedConstructionType = ref(constructionTypes[1])
+const selectedConstructionType = ref(constructionTypes[0])
 
 const classOptions = ['Рекомендованная', 'Разрешенная', 'Запрещенная']
 const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'Уртенков А.', 'Золотарев М.', 'Кузнецова Н.']
@@ -206,6 +206,17 @@ const classificationSystems = computed(() => {
     )
     return matchesSearch && matchesFilters
   })
+})
+const classificationEmptyMessage = computed(() => {
+  if (classificationCatalogRows.value.length === 0) {
+    return 'Импортируйте таблицу 2 для выбранного распоряжения'
+  }
+
+  if (classificationCatalogSearch.value) {
+    return 'Системы не найдены'
+  }
+
+  return 'Системы не найдены по выбранным фильтрам'
 })
 const classificationSystemRows = computed(() => {
   const rows: SystemCatalogRow[][] = []
@@ -912,36 +923,67 @@ function clearClassificationFilters() {
   openedClassificationSystemId.value = null
 }
 
-function toggleClassificationSystem(systemId: number) {
-  openedClassificationSystemId.value = openedClassificationSystemId.value === systemId ? null : systemId
+function classificationRowPositions() {
+  return [...document.querySelectorAll<HTMLElement>('.classification-card-row')].map((element) => ({
+    element,
+    top: element.getBoundingClientRect().top,
+  }))
 }
 
-function enterClassificationDetails(element: Element, done: () => void) {
-  const panel = element as HTMLElement
-  const targetHeight = panel.scrollHeight
-  const animation = panel.animate(
-    [
-      { height: '0px', opacity: 0, transform: 'translateY(-6px)' },
-      { height: `${targetHeight}px`, opacity: 1, transform: 'translateY(0)' },
-    ],
-    { duration: 420, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
-  )
-  animation.addEventListener('finish', done, { once: true })
-  animation.addEventListener('cancel', done, { once: true })
-}
+async function toggleClassificationSystem(systemId: number) {
+  const shouldOpen = openedClassificationSystemId.value !== systemId
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
 
-function leaveClassificationDetails(element: Element, done: () => void) {
-  const panel = element as HTMLElement
-  const startHeight = panel.getBoundingClientRect().height
-  const animation = panel.animate(
-    [
-      { height: `${startHeight}px`, opacity: 1, transform: 'translateY(0)' },
-      { height: '0px', opacity: 0, transform: 'translateY(-6px)' },
-    ],
-    { duration: 360, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
-  )
-  animation.addEventListener('finish', done, { once: true })
-  animation.addEventListener('cancel', done, { once: true })
+  if (!shouldOpen && !reduceMotion) {
+    const details = document.querySelector<HTMLElement>('.classification-details-shell')
+    if (details) {
+      await details.animate(
+        [
+          { opacity: 1, transform: 'translateY(0)' },
+          { opacity: 0, transform: 'translateY(-4px)' },
+        ],
+        { duration: 110, easing: 'ease-out', fill: 'forwards' },
+      ).finished.catch(() => undefined)
+    }
+  }
+
+  const previousPositions = classificationRowPositions()
+  openedClassificationSystemId.value = shouldOpen ? systemId : null
+  await nextTick()
+
+  if (reduceMotion) {
+    return
+  }
+
+  for (const { element, top } of previousPositions) {
+    if (!element.isConnected) {
+      continue
+    }
+
+    const offset = top - element.getBoundingClientRect().top
+    if (Math.abs(offset) < 1) {
+      continue
+    }
+
+    element.getAnimations().forEach((animation) => animation.cancel())
+    element.animate(
+      [
+        { transform: `translateY(${offset}px)` },
+        { transform: 'translateY(0)' },
+      ],
+      { duration: 300, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+    )
+  }
+
+  if (shouldOpen) {
+    document.querySelector<HTMLElement>('.classification-details-shell')?.animate(
+      [
+        { opacity: 0, transform: 'translateY(-10px) scaleY(0.96)', transformOrigin: 'top center' },
+        { opacity: 1, transform: 'translateY(0) scaleY(1)', transformOrigin: 'top center' },
+      ],
+      { duration: 300, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+    )
+  }
 }
 
 function updateClassificationCardColumns() {
@@ -1469,12 +1511,13 @@ onBeforeUnmount(() => {
               Загрузка систем из таблицы 2...
             </p>
             <p v-else-if="classificationSystems.length === 0" class="table-message classification-cards__message">
-              {{ classificationCatalogSearch ? 'Системы не найдены' : 'Импортируйте таблицу 2 для выбранного распоряжения' }}
+              {{ classificationEmptyMessage }}
             </p>
             <div v-for="(row, rowIndex) in classificationSystemRows" :key="rowIndex" class="classification-card-row">
               <article
                 v-for="system in row"
                 :key="system.id"
+                v-memo="[system.id === openedClassificationSystemId]"
                 class="classification-card"
                 :class="`classification-card--${classModifier(system.systemClass)}`"
               >
@@ -1508,11 +1551,10 @@ onBeforeUnmount(() => {
                 </button>
               </article>
 
-              <Transition :css="false" @enter="enterClassificationDetails" @leave="leaveClassificationDetails">
-                <div
-                  v-if="openedClassificationSystem && row.some((system) => system.id === openedClassificationSystemId)"
-                  class="classification-details-shell"
-                >
+              <div
+                v-if="openedClassificationSystem && row.some((system) => system.id === openedClassificationSystemId)"
+                class="classification-details-shell"
+              >
                   <section class="classification-details">
                     <div class="classification-details__header">
                       <strong>{{ openedClassificationSystem.systemName }}</strong>
@@ -1535,10 +1577,18 @@ onBeforeUnmount(() => {
                         </tr>
                       </tbody>
                     </table>
-                    <p v-else class="table-message">Запустите парсер в настройках, чтобы загрузить характеристики.</p>
+                    <div v-else class="classification-details__empty">
+                      <span class="classification-details__empty-icon" aria-hidden="true">i</span>
+                      <div class="classification-details__empty-copy">
+                        <strong>Характеристики пока не загружены</strong>
+                        <p>Запустите парсер, чтобы добавить показатели и значения системы.</p>
+                      </div>
+                      <button type="button" class="classification-details__empty-action" @click="setPage('settings')">
+                        Перейти в настройки
+                      </button>
+                    </div>
                   </section>
-                </div>
-              </Transition>
+              </div>
             </div>
           </section>
 
