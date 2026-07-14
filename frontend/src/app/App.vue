@@ -121,6 +121,7 @@ type ComparisonRow = {
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 const activePage = ref('changes')
+const isScrollTopVisible = ref(false)
 
 const navItems = [
   { key: 'changes', label: 'Изменения' },
@@ -1449,15 +1450,29 @@ function pageTitle() {
   return navItems.find((item) => item.key === activePage.value)?.label ?? ''
 }
 
+function updateScrollTopVisibility() {
+  isScrollTopVisible.value = window.scrollY > 500
+}
+
+function scrollToPageTop() {
+  window.scrollTo({
+    top: 0,
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+  })
+}
+
 onMounted(async () => {
   updateClassificationCardColumns()
+  updateScrollTopVisibility()
   window.addEventListener('resize', updateClassificationCardColumns)
+  window.addEventListener('scroll', updateScrollTopVisibility, { passive: true })
   await loadOrders()
   await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateClassificationCardColumns)
+  window.removeEventListener('scroll', updateScrollTopVisibility)
   if (systemDocumentSearchTimer) {
     window.clearTimeout(systemDocumentSearchTimer)
   }
@@ -2548,6 +2563,19 @@ onBeforeUnmount(() => {
         <h1>{{ pageTitle() }}</h1>
       </section>
     </main>
+
+    <Transition name="scroll-top">
+      <button
+        v-if="activePage === 'changes' && isScrollTopVisible"
+        class="scroll-top-button"
+        type="button"
+        aria-label="Вернуться в начало страницы"
+        title="Наверх"
+        @click="scrollToPageTop"
+      >
+        <i aria-hidden="true" />
+      </button>
+    </Transition>
 
     <Teleport to="body">
       <Transition name="modal-fade">
