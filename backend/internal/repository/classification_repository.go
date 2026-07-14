@@ -58,6 +58,39 @@ func (r *ClassificationRepository) ReplaceAll(ctx context.Context, orderID int64
 	return nil
 }
 
+func (r *ClassificationRepository) Update(ctx context.Context, id int64, orderID int64, row model.ClassificationChange) (model.ClassificationChange, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.ClassificationChange{}, fmt.Errorf("begin classification change update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var updated model.ClassificationChange
+	err = tx.QueryRowContext(ctx, `
+		UPDATE classification_changes
+		SET system_name = $3, class_before = $4, class_after = $5
+		WHERE id = $1 AND order_id = $2
+		RETURNING id, order_id, position, system_name, system_url, class_before, class_after, imported_at
+	`, id, orderID, row.SystemName, row.ClassBefore, row.ClassAfter).Scan(
+		&updated.ID, &updated.OrderID, &updated.Position, &updated.SystemName, &updated.SystemURL,
+		&updated.ClassBefore, &updated.ClassAfter, &updated.ImportedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.ClassificationChange{}, fmt.Errorf("classification change not found")
+		}
+		return model.ClassificationChange{}, fmt.Errorf("update classification change: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `UPDATE orders SET updated_at = NOW() WHERE id = $1`, orderID); err != nil {
+		return model.ClassificationChange{}, fmt.Errorf("touch order after classification update: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return model.ClassificationChange{}, fmt.Errorf("commit classification change update: %w", err)
+	}
+	return updated, nil
+}
+
 func (r *ClassificationRepository) List(ctx context.Context, filter model.ClassificationFilter) ([]model.ClassificationChange, error) {
 	clauses := make([]string, 0, 4)
 	args := make([]any, 0, 4)

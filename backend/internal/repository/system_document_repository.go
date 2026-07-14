@@ -44,7 +44,7 @@ func (r *SystemDocumentRepository) List(ctx context.Context, filter model.System
 		JOIN system_catalog s ON s.id = d.system_catalog_id
 		JOIN orders o ON o.id = d.order_id
 		WHERE `+strings.Join(clauses, " AND ")+`
-		ORDER BY s.position, d.id
+		ORDER BY CASE WHEN BTRIM(d.comment) <> '' THEN 0 ELSE 1 END, LOWER(s.system_name), s.position, d.id
 	`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list system documents: %w", err)

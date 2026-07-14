@@ -121,6 +121,22 @@ func (s *ClassificationService) Import(ctx context.Context, orderID int64, file 
 	return s.List(ctx, model.ClassificationFilter{OrderID: orderID})
 }
 
+func (s *ClassificationService) Update(ctx context.Context, id int64, orderID int64, row model.ClassificationChange) (model.ClassificationChange, error) {
+	if id <= 0 || orderID <= 0 {
+		return model.ClassificationChange{}, fmt.Errorf("invalid classification change")
+	}
+	row.SystemName = normalizeCell(row.SystemName)
+	row.ClassBefore = normalizeStatus(row.ClassBefore)
+	row.ClassAfter = normalizeStatus(row.ClassAfter)
+	if row.SystemName == "" {
+		return model.ClassificationChange{}, fmt.Errorf("system name cannot be empty")
+	}
+	if !validStatus(row.ClassBefore, true) || !validStatus(row.ClassAfter, false) {
+		return model.ClassificationChange{}, fmt.Errorf("invalid classification status")
+	}
+	return s.repo.Update(ctx, id, orderID, row)
+}
+
 func (s *ClassificationService) Export(ctx context.Context, filter model.ClassificationFilter) ([]byte, error) {
 	rows, err := s.repo.List(ctx, filter)
 	if err != nil {
@@ -179,6 +195,13 @@ func normalizeStatus(value string) string {
 	default:
 		return value
 	}
+}
+
+func validStatus(value string, allowNew bool) bool {
+	if allowNew && value == "Новая система" {
+		return true
+	}
+	return value == "Рекомендованная" || value == "Разрешенная" || value == "Запрещенная"
 }
 
 func repairMojibake(value string) string {

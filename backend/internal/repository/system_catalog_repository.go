@@ -94,6 +94,39 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 	return nil
 }
 
+func (r *SystemCatalogRepository) Update(ctx context.Context, id int64, orderID int64, row model.SystemCatalogRow) (model.SystemCatalogRow, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.SystemCatalogRow{}, fmt.Errorf("begin system catalog update: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var updated model.SystemCatalogRow
+	err = tx.QueryRowContext(ctx, `
+		UPDATE system_catalog
+		SET code = $3, system_name = $4, system_class = $5, curator = $6
+		WHERE id = $1 AND order_id = $2
+		RETURNING id, order_id, position, code, system_name, system_url, system_class, curator, imported_at
+	`, id, orderID, row.Code, row.SystemName, row.SystemClass, row.Curator).Scan(
+		&updated.ID, &updated.OrderID, &updated.Position, &updated.Code, &updated.SystemName,
+		&updated.SystemURL, &updated.SystemClass, &updated.Curator, &updated.ImportedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.SystemCatalogRow{}, fmt.Errorf("system catalog row not found")
+		}
+		return model.SystemCatalogRow{}, fmt.Errorf("update system catalog row: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `UPDATE orders SET updated_at = NOW() WHERE id = $1`, orderID); err != nil {
+		return model.SystemCatalogRow{}, fmt.Errorf("touch order after system catalog update: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return model.SystemCatalogRow{}, fmt.Errorf("commit system catalog update: %w", err)
+	}
+	return updated, nil
+}
+
 func (r *SystemCatalogRepository) List(ctx context.Context, filter model.SystemCatalogFilter) ([]model.SystemCatalogRow, error) {
 	clauses := make([]string, 0, 4)
 	args := make([]any, 0, 4)

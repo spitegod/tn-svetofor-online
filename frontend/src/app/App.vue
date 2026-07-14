@@ -120,7 +120,7 @@ type ComparisonRow = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
-const activePage = ref('systems')
+const activePage = ref('changes')
 
 const navItems = [
   { key: 'changes', label: 'Изменения' },
@@ -139,7 +139,7 @@ const constructionTypes = [
 ]
 const selectedConstructionType = ref(constructionTypes[0])
 
-const classOptions = ['Рекомендованная', 'Разрешенная', 'Запрещенная']
+const classOptions = ['Разрешенная', 'Рекомендованная', 'Запрещенная']
 const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'Уртенков А.', 'Золотарев М.', 'Кузнецова Н.']
 
 const orders = ref<Order[]>([])
@@ -155,6 +155,8 @@ const comparisonError = ref('')
 const isOrdersLoading = ref(false)
 const ordersError = ref('')
 const orderRenameTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
+const classificationEditTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
+const systemCatalogEditTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 const documentCommentTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 let systemDocumentSearchTimer: ReturnType<typeof window.setTimeout> | null = null
 const selectedSystemTypeSlug = ref('')
@@ -735,6 +737,48 @@ function classificationChangesEmptyMessage() {
   return `Для типа «${selectedConstructionType.value}» системы не найдены`
 }
 
+function scheduleClassificationRowSave(row: ClassificationChange) {
+  const currentTimer = classificationEditTimers.get(row.id)
+  if (currentTimer) {
+    window.clearTimeout(currentTimer)
+  }
+  classificationEditTimers.set(row.id, window.setTimeout(() => saveClassificationRow(row), 350))
+}
+
+async function saveClassificationRow(row: ClassificationChange) {
+  const currentTimer = classificationEditTimers.get(row.id)
+  if (currentTimer) {
+    window.clearTimeout(currentTimer)
+    classificationEditTimers.delete(row.id)
+  }
+  const submitted = {
+    systemName: row.systemName,
+    classBefore: row.classBefore,
+    classAfter: row.classAfter,
+  }
+  try {
+    const query = new URLSearchParams({ orderId: String(row.orderId) })
+    const response = await fetch(`${API_BASE_URL}/classification-changes/${row.id}?${query.toString()}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(submitted),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось сохранить строку таблицы 1')
+    }
+    const saved: ClassificationChange = await response.json()
+    if (row.systemName === submitted.systemName && row.classBefore === submitted.classBefore && row.classAfter === submitted.classAfter) {
+      row.systemName = saved.systemName
+      row.classBefore = saved.classBefore
+      row.classAfter = saved.classAfter
+    }
+    classificationError.value = ''
+  } catch (error) {
+    classificationError.value = error instanceof Error ? error.message : 'Не удалось сохранить строку таблицы 1'
+  }
+}
+
 function buildSystemCatalogQuery() {
   const params = new URLSearchParams()
   if (selectedOrderId.value) {
@@ -903,6 +947,66 @@ function currentSystemCatalogRows() {
   return systemCatalogRows.value
 }
 
+function scheduleSystemCatalogRowSave(row: SystemCatalogRow) {
+  const currentTimer = systemCatalogEditTimers.get(row.id)
+  if (currentTimer) {
+    window.clearTimeout(currentTimer)
+  }
+  systemCatalogEditTimers.set(row.id, window.setTimeout(() => saveSystemCatalogRow(row), 350))
+}
+
+function syncSystemCatalogRow(saved: SystemCatalogRow) {
+  for (const collection of [systemCatalogRows.value, classificationCatalogRows.value]) {
+    const target = collection.find((item) => item.id === saved.id)
+    if (target) {
+      Object.assign(target, saved, { characteristics: target.characteristics })
+    }
+  }
+  for (const collection of [systemDocumentRows.value, documentRows.value]) {
+    const target = collection.find((item) => item.systemCatalogId === saved.id)
+    if (target) {
+      target.code = saved.code
+      target.systemName = saved.systemName
+      target.systemUrl = saved.systemUrl
+      target.systemClass = saved.systemClass
+      target.curator = saved.curator
+    }
+  }
+}
+
+async function saveSystemCatalogRow(row: SystemCatalogRow) {
+  const currentTimer = systemCatalogEditTimers.get(row.id)
+  if (currentTimer) {
+    window.clearTimeout(currentTimer)
+    systemCatalogEditTimers.delete(row.id)
+  }
+  const submitted = {
+    code: row.code,
+    systemName: row.systemName,
+    systemClass: row.systemClass,
+    curator: row.curator,
+  }
+  try {
+    const query = new URLSearchParams({ orderId: String(row.orderId) })
+    const response = await fetch(`${API_BASE_URL}/system-catalog/${row.id}?${query.toString()}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(submitted),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось сохранить строку таблицы 2')
+    }
+    const saved: SystemCatalogRow = await response.json()
+    if (row.code === submitted.code && row.systemName === submitted.systemName && row.systemClass === submitted.systemClass && row.curator === submitted.curator) {
+      syncSystemCatalogRow(saved)
+    }
+    systemCatalogError.value = ''
+  } catch (error) {
+    systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось сохранить строку таблицы 2'
+  }
+}
+
 function currentSystemDocumentRows() {
   return filteredSystemDocumentRows.value
 }
@@ -911,6 +1015,15 @@ function setPage(page: string) {
   activePage.value = page
   openedSelect.value = null
   openedComparisonMenu.value = null
+  if (page === 'changes') {
+    void loadClassificationChanges()
+  } else if (page === 'systems') {
+    void loadSystemDocuments()
+  } else if (page === 'classification') {
+    void loadClassificationCatalog()
+  } else if (page === 'settings') {
+    void Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadDocumentTable()])
+  }
 }
 
 function toggleSelect(name: string) {
@@ -1349,6 +1462,8 @@ onBeforeUnmount(() => {
     window.clearTimeout(systemDocumentSearchTimer)
   }
   documentCommentTimers.forEach((timer) => window.clearTimeout(timer))
+  classificationEditTimers.forEach((timer) => window.clearTimeout(timer))
+  systemCatalogEditTimers.forEach((timer) => window.clearTimeout(timer))
   orderRenameTimers.forEach((timer) => window.clearTimeout(timer))
 })
 </script>
@@ -2150,7 +2265,7 @@ onBeforeUnmount(() => {
             <h2 id="orders-db-title">Управление БД Распоряжений</h2>
           </div>
 
-          <div class="systems-table settings-orders-table">
+          <div class="systems-table settings-orders-table settings-table-scroll">
             <table>
               <thead>
                 <tr>
@@ -2247,7 +2362,7 @@ onBeforeUnmount(() => {
 
             <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
 
-            <div class="systems-table settings-data-table">
+            <div class="systems-table settings-data-table settings-table-scroll">
               <table>
                 <thead>
                   <tr>
@@ -2265,16 +2380,25 @@ onBeforeUnmount(() => {
                   </tr>
                   <tr v-for="row in currentClassificationRows()" :key="`settings-${row.id}`">
                     <td>
-                      <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
-                        {{ row.systemName }}
-                      </a>
-                      <span v-else>{{ row.systemName }}</span>
+                      <input
+                        v-model="row.systemName"
+                        class="settings-cell-input"
+                        type="text"
+                        aria-label="Название системы"
+                        @input="scheduleClassificationRowSave(row)"
+                        @blur="saveClassificationRow(row)"
+                      />
                     </td>
                     <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
-                      {{ row.classBefore }}
+                      <select v-model="row.classBefore" class="settings-cell-select" aria-label="Класс было" @change="saveClassificationRow(row)">
+                        <option value="Новая система">Новая система</option>
+                        <option v-for="option in classOptions" :key="`before-${option}`" :value="option">{{ option }}</option>
+                      </select>
                     </td>
                     <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
-                      {{ row.classAfter }}
+                      <select v-model="row.classAfter" class="settings-cell-select" aria-label="Класс стало" @change="saveClassificationRow(row)">
+                        <option v-for="option in classOptions" :key="`after-${option}`" :value="option">{{ option }}</option>
+                      </select>
                     </td>
                   </tr>
                 </tbody>
@@ -2307,7 +2431,7 @@ onBeforeUnmount(() => {
 
             <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
 
-            <div class="systems-table settings-data-table">
+            <div class="systems-table settings-data-table settings-table-scroll">
               <table>
                 <thead>
                   <tr>
@@ -2322,17 +2446,41 @@ onBeforeUnmount(() => {
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 2</td>
                   </tr>
                   <tr v-for="row in currentSystemCatalogRows()" :key="`settings-system-${row.id}`">
-                    <td>{{ row.code }}</td>
                     <td>
-                      <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
-                        {{ row.systemName }}
-                      </a>
-                      <span v-else>{{ row.systemName }}</span>
+                      <input
+                        v-model="row.code"
+                        class="settings-cell-input"
+                        type="text"
+                        aria-label="Шифр системы"
+                        @input="scheduleSystemCatalogRowSave(row)"
+                        @blur="saveSystemCatalogRow(row)"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        v-model="row.systemName"
+                        class="settings-cell-input"
+                        type="text"
+                        aria-label="Название системы"
+                        @input="scheduleSystemCatalogRowSave(row)"
+                        @blur="saveSystemCatalogRow(row)"
+                      />
                     </td>
                     <td :class="`status-cell status-cell--${classModifier(row.systemClass)}`">
-                      {{ row.systemClass }}
+                      <select v-model="row.systemClass" class="settings-cell-select" aria-label="Класс системы" @change="saveSystemCatalogRow(row)">
+                        <option v-for="option in classOptions" :key="`catalog-${option}`" :value="option">{{ option }}</option>
+                      </select>
                     </td>
-                    <td>{{ row.curator }}</td>
+                    <td>
+                      <input
+                        v-model="row.curator"
+                        class="settings-cell-input"
+                        type="text"
+                        aria-label="Куратор"
+                        @input="scheduleSystemCatalogRowSave(row)"
+                        @blur="saveSystemCatalogRow(row)"
+                      />
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -2350,7 +2498,7 @@ onBeforeUnmount(() => {
             <p v-if="documentError" class="table-message table-message--error">{{ documentError }}</p>
             <p v-else-if="isDocumentTableLoading" class="table-message">Загрузка таблицы 3...</p>
 
-            <div class="systems-table settings-docs-table">
+            <div class="systems-table settings-docs-table settings-table-scroll">
               <table>
                 <thead>
                   <tr>
