@@ -171,6 +171,7 @@ const comparisonDropIndex = ref<number | null>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)
 const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
+const classificationVisibleLimit = ref(20)
 const classificationStats = ref<ClassificationStats>({
   addedSystems: 0,
   recommended: 0,
@@ -621,6 +622,7 @@ function buildClassificationQuery() {
 
 function applyClassificationPayload(payload: ClassificationResponse) {
   classificationRows.value = payload.rows
+  classificationVisibleLimit.value = 20
   classificationStats.value = payload.stats
   beforeOptions.value = payload.beforeOptions.length > 1 ? payload.beforeOptions : beforeOptions.value
   afterOptions.value = payload.afterOptions.length > 1 ? payload.afterOptions : afterOptions.value
@@ -711,6 +713,18 @@ function currentClassificationRows() {
   }
 
   return classificationRows.value.filter((row) => row.constructionType === selectedConstructionType.value)
+}
+
+function visibleClassificationRows() {
+  return currentClassificationRows().slice(0, classificationVisibleLimit.value)
+}
+
+function showMoreClassificationRows() {
+  classificationVisibleLimit.value += 20
+}
+
+function nextClassificationRowsCount() {
+  return Math.min(20, currentClassificationRows().length - classificationVisibleLimit.value)
 }
 
 function classificationChangesEmptyMessage() {
@@ -1501,7 +1515,7 @@ onBeforeUnmount(() => {
               <tr v-if="currentClassificationRows().length === 0">
                 <td class="empty-table-cell" colspan="3">{{ classificationChangesEmptyMessage() }}</td>
               </tr>
-              <tr v-for="row in currentClassificationRows()" :key="row.id">
+              <tr v-for="row in visibleClassificationRows()" :key="row.id">
                 <td>
                   <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
                     {{ row.systemName }}
@@ -1520,7 +1534,15 @@ onBeforeUnmount(() => {
           </table>
         </div>
 
-        <button class="more-button" type="button">Показать еще</button>
+        <button
+          v-if="currentClassificationRows().length > classificationVisibleLimit"
+          class="more-button"
+          type="button"
+          @click="showMoreClassificationRows"
+        >
+          <span>Показать ещё {{ nextClassificationRowsCount() }}</span>
+          <i aria-hidden="true" />
+        </button>
       </section>
 
       <section v-else-if="activePage === 'systems'" class="systems-page">
