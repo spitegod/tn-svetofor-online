@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"tn/backend/internal/repository"
 
 	"github.com/xuri/excelize/v2"
+	"golang.org/x/net/html"
 	"golang.org/x/text/encoding/charmap"
 )
 
@@ -29,7 +29,7 @@ func NewClassificationService(repo *repository.ClassificationRepository) *Classi
 	return &ClassificationService{
 		repo: repo,
 		httpClient: &http.Client{
-			Timeout: 2 * time.Second,
+			Timeout: 15 * time.Second,
 		},
 	}
 }
@@ -247,29 +247,36 @@ func (s *ClassificationService) resolveSystemURL(ctx context.Context, systemName
 		return ""
 	}
 
-	body, err := io.ReadAll(io.LimitReader(response.Body, 2*1024*1024))
+	return systemURLFromSearch(response.Body, systemName)
+}
+
+func systemURLFromSearch(body io.Reader, systemName string) string {
+	document, err := html.Parse(io.LimitReader(body, 2*1024*1024))
 	if err != nil {
 		return ""
 	}
 
-	content := string(body)
-	if !strings.Contains(strings.ToLower(content), strings.ToLower(systemName)) {
-		return ""
-	}
-
-	matches := regexp.MustCompile(`href="([^"]*/systems/[^"]+)"`).FindAllStringSubmatch(content, -1)
-	for _, match := range matches {
-		if len(match) < 2 {
+	wantedName := normalizeSystemName(systemName)
+	for _, anchor := range findNodes(document, func(node *html.Node) bool {
+		return node.Type == html.ElementNode && node.Data == "a" && hasClass(node, "b-search-teaser__title")
+	}) {
+		if normalizeSystemName(nodeText(anchor)) != wantedName {
 			continue
 		}
 
-		link := match[1]
-		if strings.HasPrefix(link, "/") {
-			return "https://nav.tn.ru" + link
+		link, err := url.Parse(attribute(anchor, "href"))
+		if err != nil {
+			continue
 		}
-		if strings.HasPrefix(link, "https://nav.tn.ru/") {
-			return link
+
+		absolute := (&url.URL{Scheme: "https", Host: "nav.tn.ru"}).ResolveReference(link)
+		if absolute.Hostname() != "nav.tn.ru" || !strings.HasPrefix(absolute.Path, "/systems/") {
+			continue
 		}
+
+		absolute.RawQuery = ""
+		absolute.Fragment = ""
+		return absolute.String()
 	}
 
 	return ""
