@@ -183,7 +183,14 @@ const selectedBeforeFilter = ref('Все')
 const selectedAfterFilter = ref('Все')
 const tableSearch = ref('')
 const isClassificationLoading = ref(false)
+const classificationLoadingMessage = ref('Загрузка таблицы...')
 const classificationError = ref('')
+const classificationConstructionTypes = computed(() => [...constructionTypes, 'Тип не присвоен'].map((name) => ({
+  name,
+  count: name === 'Все'
+    ? classificationRows.value.length
+    : classificationRows.value.filter((row) => row.constructionType === name).length,
+})))
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
 const documentRows = ref<SystemDocumentRow[]>([])
@@ -621,6 +628,7 @@ function applyClassificationPayload(payload: ClassificationResponse) {
 
 async function loadClassificationChanges() {
   isClassificationLoading.value = true
+  classificationLoadingMessage.value = 'Загрузка таблицы...'
   classificationError.value = ''
 
   try {
@@ -655,6 +663,7 @@ async function importTableFile(event: Event) {
     formData.append('orderId', String(selectedOrderId.value))
   }
   isClassificationLoading.value = true
+  classificationLoadingMessage.value = 'Определяем ссылки и типы систем на Навигаторе...'
   classificationError.value = ''
 
   try {
@@ -702,6 +711,14 @@ function currentClassificationRows() {
   }
 
   return classificationRows.value.filter((row) => row.constructionType === selectedConstructionType.value)
+}
+
+function classificationChangesEmptyMessage() {
+  if (classificationRows.value.length === 0) {
+    return 'В этом распоряжении пока нет данных таблицы 1'
+  }
+
+  return `Для типа «${selectedConstructionType.value}» системы не найдены`
 }
 
 function buildSystemCatalogQuery() {
@@ -1400,16 +1417,17 @@ onBeforeUnmount(() => {
 
         <section class="filter-panel" aria-label="Тип строительства">
           <h2>Тип строительства</h2>
-          <div class="type-tabs">
+          <div class="type-tabs type-tabs--changes">
             <button
-              v-for="type in constructionTypes"
-              :key="type"
+              v-for="type in classificationConstructionTypes"
+              :key="type.name"
               class="type-tab"
-              :class="{ 'type-tab--active': type === selectedConstructionType }"
+              :class="{ 'type-tab--active': type.name === selectedConstructionType }"
               type="button"
-              @click="selectConstructionType(type)"
+              @click="selectConstructionType(type.name)"
             >
-              {{ type }}
+              <span>{{ type.name }}</span>
+              <strong>{{ type.count }}</strong>
             </button>
           </div>
         </section>
@@ -1465,7 +1483,7 @@ onBeforeUnmount(() => {
         </section>
 
         <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
-        <p v-else-if="isClassificationLoading" class="table-message">Загрузка таблицы...</p>
+        <p v-else-if="isClassificationLoading" class="table-message">{{ classificationLoadingMessage }}</p>
 
         <div class="systems-table">
           <table>
@@ -1481,7 +1499,7 @@ onBeforeUnmount(() => {
             </thead>
             <tbody>
               <tr v-if="currentClassificationRows().length === 0">
-                <td class="empty-table-cell" colspan="3">В этом распоряжении пока нет данных таблицы 1</td>
+                <td class="empty-table-cell" colspan="3">{{ classificationChangesEmptyMessage() }}</td>
               </tr>
               <tr v-for="row in currentClassificationRows()" :key="row.id">
                 <td>
