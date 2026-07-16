@@ -201,7 +201,9 @@ const comparisonAllOrders = ref(true)
 const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
 const comparisonOnlyDifferences = ref(false)
-const comparisonSort = ref<'name-asc' | 'name-desc'>('name-asc')
+const comparisonSort = ref<'differences-first' | 'name-asc' | 'name-desc'>('differences-first')
+const comparisonPageSize = ref('20')
+const comparisonPage = ref(1)
 const isComparisonLoading = ref(false)
 const comparisonError = ref('')
 const isOrdersLoading = ref(false)
@@ -288,6 +290,7 @@ const openedClassificationSystemId = ref<number | null>(null)
 const classificationCardColumns = ref(3)
 const openedClassificationFilter = ref<string | null>(null)
 const selectedClassificationFilters = ref<Record<string, string>>({})
+const classificationFilterSearch = ref('')
 const systemTypeSourceRows = computed(() => activePage.value === 'systems' ? systemDocumentRows.value : classificationCatalogRows.value)
 const systemTypes = computed(() => [{ slug: '', name: 'Все системы', imageUrl: '', position: 0 }, ...parsedSystemTypes.value].map((type) => ({
   ...type,
@@ -320,6 +323,11 @@ const classificationFilterGroups = computed(() => {
     }
   }
   return [...names]
+})
+const visibleClassificationFilterGroups = computed(() => {
+  const query = classificationFilterSearch.value.trim().toLocaleLowerCase('ru-RU')
+  if (!query) return classificationFilterGroups.value
+  return classificationFilterGroups.value.filter((name) => name.toLocaleLowerCase('ru-RU').includes(query))
 })
 const selectedClassificationFilterCount = computed(() => Object.keys(selectedClassificationFilters.value).length)
 const classificationSystems = computed(() => {
@@ -822,14 +830,84 @@ function comparisonRows() {
 
   return rows
     .filter((row) => !comparisonOnlyDifferences.value || new Set(row.values).size > 1)
-    .sort((left, right) => comparisonSort.value === 'name-desc'
-      ? right.name.localeCompare(left.name, 'ru')
-      : left.name.localeCompare(right.name, 'ru'))
+    .sort((left, right) => {
+      if (comparisonSort.value === 'differences-first') {
+        const differenceOrder = Number(new Set(right.values).size > 1) - Number(new Set(left.values).size > 1)
+        if (differenceOrder !== 0) return differenceOrder
+      }
+      const nameOrder = normalizedComparisonName(left.name).localeCompare(normalizedComparisonName(right.name), 'ru', { numeric: true })
+      return comparisonSort.value === 'name-desc' ? -nameOrder : nameOrder
+    })
+}
+
+function visibleComparisonRows() {
+  const rows = comparisonRows()
+  if (comparisonPageSize.value === 'all') return rows
+  const pageSize = Number(comparisonPageSize.value)
+  const start = (comparisonPage.value - 1) * pageSize
+  return rows.slice(start, start + pageSize)
+}
+
+function comparisonPageCount() {
+  if (comparisonPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(comparisonRows().length / Number(comparisonPageSize.value)))
+}
+
+function comparisonRangeStart() {
+  if (comparisonRows().length === 0) return 0
+  if (comparisonPageSize.value === 'all') return 1
+  return (comparisonPage.value - 1) * Number(comparisonPageSize.value) + 1
+}
+
+function comparisonRangeEnd() {
+  if (comparisonPageSize.value === 'all') return comparisonRows().length
+  return Math.min(comparisonPage.value * Number(comparisonPageSize.value), comparisonRows().length)
+}
+
+function changeComparisonPageSize() {
+  comparisonPage.value = 1
+}
+
+async function changeComparisonPage(nextPage: number) {
+  comparisonPage.value = Math.min(Math.max(nextPage, 1), comparisonPageCount())
+  await nextTick()
+  document.querySelector<HTMLElement>('.comparison-table')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+}
+
+function normalizedComparisonName(value: string) {
+  return value
+    .trim()
+    .replace(/^ремонтная\s+система\s+/i, '')
+    .replace(/^[а-яёa-z]{1,5}\s*[-–—:]\s*/i, '')
+}
+
+function comparisonSortLabel() {
+  switch (comparisonSort.value) {
+    case 'name-asc': return 'Без префикса (А–Я)'
+    case 'name-desc': return 'Без префикса (Я–А)'
+    default: return 'Различия сначала'
+  }
+}
+
+function selectComparisonSort(value: 'differences-first' | 'name-asc' | 'name-desc') {
+  comparisonSort.value = value
+  comparisonPage.value = 1
+  openedSelect.value = null
+}
+
+function selectComparisonDifferenceFilter(onlyDifferences: boolean) {
+  comparisonOnlyDifferences.value = onlyDifferences
+  comparisonPage.value = 1
+  openedSelect.value = null
 }
 
 function hideComparisonRow(row: ComparisonRow) {
   if (!hiddenComparisonRows.value.includes(row.key)) {
     hiddenComparisonRows.value = [...hiddenComparisonRows.value, row.key]
+    comparisonPage.value = Math.min(comparisonPage.value, comparisonPageCount())
   }
 }
 
@@ -837,15 +915,28 @@ function comparisonValue(row: ComparisonRow, index: number) {
   return row.values[index] ?? 'н/д'
 }
 
-function exportComparisonTable() {
+function comparisonRowHasDifference(row: ComparisonRow) {
+  return new Set(row.values).size > 1
+}
+
+async function exportComparisonTable() {
   const headers = ['Название системы', ...comparisonOrderIds.value.map(comparisonOrderName)]
-  const escapeCell = (value: string) => `"${value.replaceAll('"', '""')}"`
   const rows = comparisonRows().map((row) => [row.name, ...row.values])
-  const csv = [headers, ...rows].map((row) => row.map(escapeCell).join(';')).join('\n')
-  const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
+
+  const response = await fetch(`${API_BASE_URL}/comparison/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ headers, rows }),
+  })
+  if (!response.ok) {
+    comparisonError.value = 'Не удалось экспортировать сравнение'
+    return
+  }
+
+  const url = URL.createObjectURL(await response.blob())
   const link = document.createElement('a')
   link.href = url
-  link.download = 'comparison.csv'
+  link.download = 'comparison.xlsx'
   link.click()
   URL.revokeObjectURL(url)
 }
@@ -1506,6 +1597,18 @@ function clearClassificationFilters() {
   classificationCatalogPage.value = 1
   openedClassificationFilter.value = null
   openedClassificationSystemId.value = null
+}
+
+function removeClassificationFilter(name: string) {
+  const next = { ...selectedClassificationFilters.value }
+  delete next[name]
+  selectedClassificationFilters.value = next
+  classificationCatalogPage.value = 1
+  openedClassificationSystemId.value = null
+}
+
+function collapseClassificationFilters() {
+  openedClassificationFilter.value = null
 }
 
 function classificationRowPositions() {
@@ -2258,13 +2361,11 @@ onBeforeUnmount(() => {
               <col class="changes-table__name-column" />
               <col />
               <col />
-              <col class="changes-table__action-column" />
             </colgroup>
             <thead>
               <tr>
                 <th rowspan="2">Название системы</th>
                 <th colspan="2">Класс</th>
-                <th rowspan="2" aria-label="Открыть систему" />
               </tr>
               <tr>
                 <th>было</th>
@@ -2273,7 +2374,7 @@ onBeforeUnmount(() => {
             </thead>
             <tbody>
               <tr v-if="currentClassificationRows().length === 0">
-                <td class="empty-table-cell" colspan="4">{{ classificationChangesEmptyMessage() }}</td>
+                <td class="empty-table-cell" colspan="3">{{ classificationChangesEmptyMessage() }}</td>
               </tr>
               <tr v-for="row in visibleClassificationRows()" :key="row.id" tabindex="-1">
                 <td class="changes-system-cell">
@@ -2301,11 +2402,6 @@ onBeforeUnmount(() => {
                     <Info v-else :size="15" aria-hidden="true" />
                     {{ row.classAfter }}
                   </span>
-                </td>
-                <td class="changes-row-action">
-                  <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer" :aria-label="`Открыть ${row.systemName}`">
-                    <ChevronRight :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  </a>
                 </td>
               </tr>
             </tbody>
@@ -2947,11 +3043,44 @@ onBeforeUnmount(() => {
                 Сбросить
               </button>
             </header>
+            <div class="classification-sidebar__tools">
+              <label class="classification-sidebar__search">
+                <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
+                <input v-model="classificationFilterSearch" type="search" placeholder="Найти характеристику" />
+                <button v-if="classificationFilterSearch" type="button" aria-label="Очистить поиск фильтров" @click="classificationFilterSearch = ''">
+                  <X :size="14" :stroke-width="2" aria-hidden="true" />
+                </button>
+              </label>
+              <button
+                class="classification-sidebar__collapse"
+                type="button"
+                :disabled="!openedClassificationFilter"
+                @click="collapseClassificationFilters"
+              >
+                <ChevronUp :size="14" :stroke-width="1.9" aria-hidden="true" />
+                Свернуть все
+              </button>
+            </div>
+            <div v-if="selectedClassificationFilterCount" class="classification-sidebar__chips" aria-label="Выбранные фильтры">
+              <button
+                v-for="(value, name) in selectedClassificationFilters"
+                :key="name"
+                type="button"
+                :title="`Убрать фильтр «${name}»`"
+                @click="removeClassificationFilter(name)"
+              >
+                <span>{{ name }}: <strong>{{ value }}</strong></span>
+                <X :size="13" :stroke-width="2" aria-hidden="true" />
+              </button>
+            </div>
             <p v-if="classificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
               Для выбранного типа нет доступных характеристик.
             </p>
+            <p v-else-if="visibleClassificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
+              Характеристики не найдены.
+            </p>
             <div
-              v-for="filter in classificationFilterGroups"
+              v-for="filter in visibleClassificationFilterGroups"
               :key="filter"
               class="classification-sidebar__group"
               :class="{ 'is-open': openedClassificationFilter === filter, 'is-selected': selectedClassificationFilters[filter] }"
@@ -2993,8 +3122,13 @@ onBeforeUnmount(() => {
       <section v-else-if="activePage === 'comparison'" class="comparison-page">
         <section class="comparison-controls">
           <div class="comparison-controls__intro">
-            <h1>Сравнение систем</h1>
-            <p>Выберите распоряжения, изменения классов систем по которым нужно сравнить.</p>
+            <span class="comparison-controls__intro-icon" aria-hidden="true">
+              <Scale :size="24" :stroke-width="1.8" />
+            </span>
+            <div>
+              <h1>Сравнение систем</h1>
+              <p>Выберите распоряжения, изменения классов систем по которым нужно сравнить.</p>
+            </div>
           </div>
 
           <div class="comparison-controls__orders">
@@ -3062,6 +3196,7 @@ onBeforeUnmount(() => {
                     @click.stop="toggleSelect('comparison-add')"
                   >
                     <Plus :size="20" :stroke-width="2" aria-hidden="true" />
+                    <span>Добавить распоряжение</span>
                   </button>
                   <Transition name="select-menu">
                     <div v-if="openedSelect === 'comparison-add' && availableComparisonOrders().length" class="custom-select__menu comparison-add-menu">
@@ -3071,7 +3206,6 @@ onBeforeUnmount(() => {
                     </div>
                   </Transition>
                 </div>
-                <span>Добавить распоряжение</span>
               </div>
             </div>
           </div>
@@ -3084,32 +3218,58 @@ onBeforeUnmount(() => {
           <div class="comparison-toolbar__summary">
             <span class="comparison-toolbar__icon" aria-hidden="true"><Layers3 :size="22" :stroke-width="1.8" /></span>
             <span>
-              <small>Сравниваемых систем</small>
+              <small>Систем в таблице</small>
               <strong>{{ comparisonRows().length }} <em>шт.</em></strong>
             </span>
           </div>
           <div class="comparison-toolbar__actions">
-            <button
-              class="comparison-tool-button"
-              :class="{ 'is-active': comparisonOnlyDifferences }"
-              type="button"
-              :aria-pressed="comparisonOnlyDifferences"
-              @click="comparisonOnlyDifferences = !comparisonOnlyDifferences"
-            >
-              <ListFilter :size="17" :stroke-width="1.8" aria-hidden="true" />
-              <span>{{ comparisonOnlyDifferences ? 'Только различия' : 'Фильтры' }}</span>
-            </button>
-            <label class="comparison-sort">
-              <ArrowDownUp :size="17" :stroke-width="1.8" aria-hidden="true" />
-              <select v-model="comparisonSort" aria-label="Сортировка сравнения">
-                <option value="name-asc">По названию (А–Я)</option>
-                <option value="name-desc">По названию (Я–А)</option>
-              </select>
-              <ChevronDown :size="16" :stroke-width="1.8" aria-hidden="true" />
-            </label>
-            <button class="comparison-tool-button" type="button" :disabled="comparisonRows().length === 0" @click="exportComparisonTable">
-              <Download :size="18" :stroke-width="1.8" aria-hidden="true" />
+            <div class="custom-select comparison-difference-filter" :class="{ 'is-open': openedSelect === 'comparison-filter', 'is-active': comparisonOnlyDifferences }">
+              <button class="comparison-difference-toggle" type="button" aria-label="Фильтр сравнения" @click.stop="toggleSelect('comparison-filter')">
+                <Repeat2 v-if="comparisonOnlyDifferences" :size="17" :stroke-width="1.8" aria-hidden="true" />
+                <Layers3 v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
+                <span>{{ comparisonOnlyDifferences ? 'Только различия' : 'Все системы' }}</span>
+                <ChevronDown class="comparison-difference-chevron" :size="16" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <Transition name="select-menu">
+                <div v-if="openedSelect === 'comparison-filter'" class="custom-select__menu comparison-difference-menu">
+                  <button type="button" :class="{ 'is-selected': !comparisonOnlyDifferences }" @click="selectComparisonDifferenceFilter(false)">
+                    <Layers3 :size="16" :stroke-width="1.8" aria-hidden="true" />
+                    <span>Все системы</span>
+                  </button>
+                  <button type="button" :class="{ 'is-selected': comparisonOnlyDifferences }" @click="selectComparisonDifferenceFilter(true)">
+                    <Repeat2 :size="16" :stroke-width="1.8" aria-hidden="true" />
+                    <span>Только различия</span>
+                  </button>
+                </div>
+              </Transition>
+            </div>
+            <div class="custom-select comparison-sort" :class="{ 'is-open': openedSelect === 'comparison-sort' }">
+              <button class="comparison-sort__button" type="button" aria-label="Сортировка сравнения" @click.stop="toggleSelect('comparison-sort')">
+                <ListFilter v-if="comparisonSort === 'differences-first'" :size="17" :stroke-width="1.8" aria-hidden="true" />
+                <ArrowDownUp v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
+                <span>{{ comparisonSortLabel() }}</span>
+                <ChevronDown class="comparison-sort__chevron" :size="16" :stroke-width="1.8" aria-hidden="true" />
+              </button>
+              <Transition name="select-menu">
+                <div v-if="openedSelect === 'comparison-sort'" class="custom-select__menu comparison-sort__menu">
+                  <button type="button" :class="{ 'is-selected': comparisonSort === 'differences-first' }" @click="selectComparisonSort('differences-first')">
+                    <ListFilter :size="16" :stroke-width="1.8" aria-hidden="true" />
+                    <span>Различия сначала</span>
+                  </button>
+                  <button type="button" :class="{ 'is-selected': comparisonSort === 'name-asc' }" @click="selectComparisonSort('name-asc')">
+                    <ArrowDownUp :size="16" :stroke-width="1.8" aria-hidden="true" />
+                    <span>Без префикса (А–Я)</span>
+                  </button>
+                  <button type="button" :class="{ 'is-selected': comparisonSort === 'name-desc' }" @click="selectComparisonSort('name-desc')">
+                    <ArrowDownUp :size="16" :stroke-width="1.8" aria-hidden="true" />
+                    <span>Без префикса (Я–А)</span>
+                  </button>
+                </div>
+              </Transition>
+            </div>
+            <button class="export-button comparison-export-button" type="button" :disabled="comparisonRows().length === 0" @click="exportComparisonTable">
               <span>Экспорт</span>
+              <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
             </button>
           </div>
         </section>
@@ -3122,7 +3282,7 @@ onBeforeUnmount(() => {
                 <th v-for="(orderId, index) in comparisonOrderIds" :key="orderId">
                   <span class="comparison-table__order"><i>{{ index + 1 }}</i>{{ comparisonOrderName(orderId) }}</span>
                 </th>
-                <th>Удалить из сравнения</th>
+                <th>Действие</th>
               </tr>
             </thead>
             <tbody>
@@ -3131,9 +3291,19 @@ onBeforeUnmount(() => {
                   В выбранных распоряжениях пока нет данных таблицы 2
                 </td>
               </tr>
-              <tr v-for="row in comparisonRows()" :key="row.key">
-                <td>{{ row.name }}</td>
-                <td v-for="(_, index) in comparisonOrderIds" :key="`${row.name}-${index}`">
+              <tr v-for="row in visibleComparisonRows()" :key="row.key" :class="{ 'has-difference': comparisonRowHasDifference(row) }">
+                <td class="comparison-system-cell">
+                  <span>{{ row.name }}</span>
+                  <small v-if="comparisonRowHasDifference(row)">
+                    <Repeat2 :size="12" :stroke-width="1.9" aria-hidden="true" />
+                    Есть различия
+                  </small>
+                </td>
+                <td
+                  v-for="(_, index) in comparisonOrderIds"
+                  :key="`${row.name}-${index}`"
+                  :class="`comparison-value-cell comparison-value-cell--${classModifier(comparisonValue(row, index)) || 'empty'}`"
+                >
                   <span :class="`comparison-status comparison-status--${classModifier(comparisonValue(row, index)) || 'empty'}`">
                     <CircleCheck v-if="classModifier(comparisonValue(row, index)) === 'recommended'" :size="14" :stroke-width="2.2" aria-hidden="true" />
                     <TriangleAlert v-else-if="classModifier(comparisonValue(row, index)) === 'allowed'" :size="15" :stroke-width="2" aria-hidden="true" />
@@ -3150,6 +3320,28 @@ onBeforeUnmount(() => {
             </tbody>
           </table>
         </div>
+
+        <footer v-if="comparisonRows().length > 0" class="table-pagination comparison-table-pagination">
+          <span class="table-pagination__range">
+            Показано {{ comparisonRangeStart() }}–{{ comparisonRangeEnd() }} из {{ comparisonRows().length }}
+          </span>
+          <div class="table-pagination__controls">
+            <label>
+              <span>Строк на странице</span>
+              <select v-model="comparisonPageSize" @change="changeComparisonPageSize">
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
+            <div v-if="comparisonPageSize !== 'all'" class="table-pagination__pages">
+              <button type="button" :disabled="comparisonPage === 1" aria-label="Предыдущая страница" @click="changeComparisonPage(comparisonPage - 1)">‹</button>
+              <strong>{{ comparisonPage }} / {{ comparisonPageCount() }}</strong>
+              <button type="button" :disabled="comparisonPage >= comparisonPageCount()" aria-label="Следующая страница" @click="changeComparisonPage(comparisonPage + 1)">›</button>
+            </div>
+          </div>
+        </footer>
       </section>
 
       <section v-else-if="activePage === 'settings'" class="settings-page">
@@ -3666,4 +3858,3 @@ onBeforeUnmount(() => {
     </Teleport>
   </div>
 </template>
-  Download,

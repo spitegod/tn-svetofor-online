@@ -52,9 +52,29 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("DELETE /api/system-documents/{id}/attachment", router.deleteSystemDocumentAttachment)
 	mux.HandleFunc("PATCH /api/system-documents/{id}/comparison", router.updateSystemDocumentComparison)
 	mux.HandleFunc("PATCH /api/system-documents/comparison", router.updateSystemDocumentComparisonBulk)
+	mux.HandleFunc("POST /api/comparison/export", router.exportComparison)
 	mux.HandleFunc("DELETE /api/system-documents/{id}", router.deleteSystemDocument)
 
 	return mux
+}
+
+func (r *Router) exportComparison(w http.ResponseWriter, request *http.Request) {
+	var payload model.ComparisonExport
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("decode comparison export: %w", err))
+		return
+	}
+
+	data, err := r.systemDocuments.ExportComparison(payload)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", `attachment; filename="comparison.xlsx"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (r *Router) listSystemDocuments(w http.ResponseWriter, request *http.Request) {
