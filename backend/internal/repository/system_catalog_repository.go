@@ -281,9 +281,9 @@ func (r *SystemCatalogRepository) ReplaceSystemTypes(ctx context.Context, system
 	}
 	for _, systemType := range systemTypes {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO nav_system_types (slug, name, position)
-			VALUES ($1, $2, $3)
-		`, systemType.Slug, systemType.Name, systemType.Position); err != nil {
+			INSERT INTO nav_system_types (slug, name, image_url, image_content_type, image_data, position)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, systemType.Slug, systemType.Name, systemType.ImageURL, systemType.ImageContentType, systemType.ImageData, systemType.Position); err != nil {
 			return fmt.Errorf("insert nav system type: %w", err)
 		}
 	}
@@ -295,7 +295,7 @@ func (r *SystemCatalogRepository) ReplaceSystemTypes(ctx context.Context, system
 
 func (r *SystemCatalogRepository) SystemTypes(ctx context.Context) ([]model.SystemTypeOption, error) {
 	result, err := r.db.QueryContext(ctx, `
-		SELECT slug, name, position
+		SELECT slug, name, image_url, position
 		FROM nav_system_types
 		ORDER BY position, name
 	`)
@@ -307,7 +307,7 @@ func (r *SystemCatalogRepository) SystemTypes(ctx context.Context) ([]model.Syst
 	systemTypes := make([]model.SystemTypeOption, 0)
 	for result.Next() {
 		var systemType model.SystemTypeOption
-		if err := result.Scan(&systemType.Slug, &systemType.Name, &systemType.Position); err != nil {
+		if err := result.Scan(&systemType.Slug, &systemType.Name, &systemType.ImageURL, &systemType.Position); err != nil {
 			return nil, fmt.Errorf("scan nav system type: %w", err)
 		}
 		systemTypes = append(systemTypes, systemType)
@@ -316,6 +316,18 @@ func (r *SystemCatalogRepository) SystemTypes(ctx context.Context) ([]model.Syst
 		return nil, fmt.Errorf("iterate nav system types: %w", err)
 	}
 	return systemTypes, nil
+}
+
+func (r *SystemCatalogRepository) SystemTypeImage(ctx context.Context, slug string) (model.SystemTypeImage, error) {
+	var image model.SystemTypeImage
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT image_content_type, image_data
+		FROM nav_system_types
+		WHERE slug = $1 AND image_data IS NOT NULL
+	`, slug).Scan(&image.ContentType, &image.Data); err != nil {
+		return model.SystemTypeImage{}, fmt.Errorf("load nav system type image: %w", err)
+	}
+	return image, nil
 }
 
 func (r *SystemCatalogRepository) NavParserSettings(ctx context.Context) (model.NavParserSettings, error) {

@@ -35,10 +35,13 @@ type navSystemLink struct {
 }
 
 type navCategory struct {
-	URL      string
-	Slug     string
-	Name     string
-	Position int
+	URL              string
+	Slug             string
+	Name             string
+	ImageURL         string
+	ImageContentType string
+	ImageData        []byte
+	Position         int
 }
 
 func NewNavParserService(repo *repository.SystemCatalogRepository) *NavParserService {
@@ -226,6 +229,15 @@ func (s *NavParserService) crawlCatalog(ctx context.Context) ([]navSystemLink, e
 			for category := range categoryCh {
 				links, categoryName, err := s.crawlCategory(ctx, category.URL)
 				category.Name = categoryName
+				if err == nil && category.ImageURL != "" {
+					contentType, data, imageErr := s.fetchImage(ctx, category.ImageURL)
+					if imageErr != nil {
+						log.Printf("load NAV system type image %s: %v", category.ImageURL, imageErr)
+					} else {
+						category.ImageContentType = contentType
+						category.ImageData = data
+					}
+				}
 				resultCh <- categoryResult{category: category, links: links, err: err}
 			}
 		}()
@@ -265,9 +277,12 @@ func (s *NavParserService) crawlCatalog(ctx context.Context) ([]navSystemLink, e
 			continue
 		}
 		systemTypes = append(systemTypes, model.SystemTypeOption{
-			Slug:     category.Slug,
-			Name:     category.Name,
-			Position: len(systemTypes) + 1,
+			Slug:             category.Slug,
+			Name:             category.Name,
+			ImageURL:         category.ImageURL,
+			ImageContentType: category.ImageContentType,
+			ImageData:        category.ImageData,
+			Position:         len(systemTypes) + 1,
 		})
 	}
 	if err := s.repo.ReplaceSystemTypes(ctx, systemTypes); err != nil {
@@ -362,6 +377,43 @@ func (s *NavParserService) fetchDocument(ctx context.Context, address string) (*
 	return html.Parse(io.LimitReader(response.Body, 12<<20))
 }
 
+func (s *NavParserService) fetchImage(ctx context.Context, address string) (string, []byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	request.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TNSvetofor/1.0; +https://nav.tn.ru/)")
+	request.Header.Set("Referer", navBaseURL+"/systems/")
+	response, err := s.client.Do(request)
+	if err != nil {
+		return "", nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("unexpected HTTP status %s", response.Status)
+	}
+	contentType := strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
+	if !strings.HasPrefix(contentType, "image/") {
+		return "", nil, fmt.Errorf("unexpected content type %q", contentType)
+	}
+	const maxImageSize = 4 << 20
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxImageSize+1))
+	if err != nil {
+		return "", nil, err
+	}
+	if len(data) == 0 || len(data) > maxImageSize {
+		return "", nil, fmt.Errorf("invalid image size %d", len(data))
+	}
+	return contentType, data, nil
+}
+
+func (s *NavParserService) SystemTypeImage(ctx context.Context, slug string) (model.SystemTypeImage, error) {
+	if strings.TrimSpace(slug) == "" {
+		return model.SystemTypeImage{}, fmt.Errorf("system type slug is required")
+	}
+	return s.repo.SystemTypeImage(ctx, slug)
+}
+
 func collectCategoryURLs(document *html.Node) []navCategory {
 	seen := make(map[string]struct{})
 	result := make([]navCategory, 0)
@@ -380,10 +432,43 @@ func collectCategoryURLs(document *html.Node) []navCategory {
 				continue
 			}
 			seen[address] = struct{}{}
-			result = append(result, navCategory{URL: address, Slug: parts[1], Position: len(result) + 1})
+			result = append(result, navCategory{
+				URL:      address,
+				Slug:     parts[1],
+				ImageURL: categoryImageURL(anchor),
+				Position: len(result) + 1,
+			})
 		}
 	}
 	return result
+}
+
+func categoryImageURL(anchor *html.Node) string {
+	image := findNode(anchor, func(node *html.Node) bool {
+		return node.Type == html.ElementNode && node.Data == "img"
+	})
+	if image == nil {
+		return ""
+	}
+	for _, name := range []string{"src", "data-src", "data-lazy-src"} {
+		if resolved := resolveNavAssetURL(attribute(image, name)); resolved != "" {
+			return resolved
+		}
+	}
+	return ""
+}
+
+func resolveNavAssetURL(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Path == "" {
+		return ""
+	}
+	absolute := (&url.URL{Scheme: "https", Host: "nav.tn.ru"}).ResolveReference(parsed)
+	host := strings.ToLower(absolute.Hostname())
+	if absolute.Scheme != "https" || (host != "tn.ru" && !strings.HasSuffix(host, ".tn.ru")) {
+		return ""
+	}
+	return absolute.String()
 }
 
 func collectSystemLinks(document *html.Node, systemType string) []navSystemLink {

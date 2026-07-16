@@ -22,9 +22,17 @@ type SystemCharacteristic struct {
 }
 
 type SystemTypeOption struct {
-	Slug     string `json:"slug"`
-	Name     string `json:"name"`
-	Position int    `json:"position"`
+	Slug             string `json:"slug"`
+	Name             string `json:"name"`
+	ImageURL         string `json:"imageUrl"`
+	ImageContentType string `json:"-"`
+	ImageData        []byte `json:"-"`
+	Position         int    `json:"position"`
+}
+
+type SystemTypeImage struct {
+	ContentType string
+	Data        []byte
 }
 
 type NavParseReport struct {
