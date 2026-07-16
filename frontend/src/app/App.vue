@@ -2258,13 +2258,11 @@ onBeforeUnmount(() => {
               <col class="changes-table__name-column" />
               <col />
               <col />
-              <col class="changes-table__action-column" />
             </colgroup>
             <thead>
               <tr>
                 <th rowspan="2">Название системы</th>
                 <th colspan="2">Класс</th>
-                <th rowspan="2" aria-label="Открыть систему" />
               </tr>
               <tr>
                 <th>было</th>
@@ -2273,7 +2271,7 @@ onBeforeUnmount(() => {
             </thead>
             <tbody>
               <tr v-if="currentClassificationRows().length === 0">
-                <td class="empty-table-cell" colspan="4">{{ classificationChangesEmptyMessage() }}</td>
+                <td class="empty-table-cell" colspan="3">{{ classificationChangesEmptyMessage() }}</td>
               </tr>
               <tr v-for="row in visibleClassificationRows()" :key="row.id" tabindex="-1">
                 <td class="changes-system-cell">
@@ -2301,11 +2299,6 @@ onBeforeUnmount(() => {
                     <Info v-else :size="15" aria-hidden="true" />
                     {{ row.classAfter }}
                   </span>
-                </td>
-                <td class="changes-row-action">
-                  <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer" :aria-label="`Открыть ${row.systemName}`">
-                    <ChevronRight :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  </a>
                 </td>
               </tr>
             </tbody>
