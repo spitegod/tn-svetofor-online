@@ -1999,7 +1999,7 @@ button:disabled {
 
 .settings-page {
   display: grid;
-  gap: 42px;
+  gap: 48px;
 }
 
 .settings-section {
@@ -2023,15 +2023,113 @@ button:disabled {
   font-size: 22px;
 }
 
-.parser-settings p {
+.settings-section__eyebrow {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--tn-red);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.parser-settings {
+  border: 1px solid var(--tn-line);
+  border-radius: 10px;
+  background: #f8f9fb;
+  padding: 24px;
+}
+
+.parser-settings__main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 32px;
+}
+
+.parser-settings__content {
+  min-width: 0;
+}
+
+.parser-settings__content p {
   max-width: 720px;
-  margin: 0;
+  margin: 7px 0 0;
   color: var(--tn-muted);
   font-size: 14px;
 }
 
+.parser-settings__controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.parser-frequency-field {
+  display: grid;
+  gap: 7px;
+}
+
+.parser-frequency-field > span:first-child {
+  color: var(--tn-ink);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.parser-frequency-field__input {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #cfd6e0;
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.parser-frequency-field__input:focus-within {
+  border-color: #aeb8c6;
+  box-shadow: 0 0 0 3px rgba(107, 124, 147, 0.12);
+}
+
+.parser-frequency-field__input input {
+  width: 68px;
+  min-height: 38px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--tn-ink);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0 4px 0 12px;
+}
+
+.parser-frequency-field__input > span {
+  color: var(--tn-muted);
+  font-size: 12px;
+  padding-right: 10px;
+}
+
 .parser-settings__button {
-  justify-self: start;
+  min-height: 40px;
+  justify-self: end;
+  padding: 0 18px;
+}
+
+.parser-settings__button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+  transform: none;
+}
+
+.parser-settings__hint {
+  margin: -7px 0 0;
+  color: var(--tn-muted);
+  font-size: 12px;
+}
+
+.orders-settings {
+  border-top: 1px solid var(--tn-line);
+  padding-top: 32px;
 }
 
 .parser-settings__not-found {
@@ -2381,18 +2479,25 @@ button:disabled {
 
 .settings-docs-table th:nth-child(4),
 .settings-docs-table td:nth-child(4) {
-  width: 150px;
+  width: 230px;
   text-align: center;
 }
 
 .settings-document-link {
   display: inline-flex;
+  max-width: 100%;
   align-items: center;
   gap: 8px;
   color: var(--tn-ink);
   font-size: 13px;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.settings-document-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-document-link img {
@@ -2406,6 +2511,34 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+.document-upload-button {
+  min-height: 30px;
+  border: 1px solid #cfd6e0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--tn-ink);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 11px;
+  white-space: nowrap;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.document-upload-button:hover,
+.document-upload-button:focus-visible {
+  border-color: #aeb8c6;
+  background: #f5f7fa;
+  color: var(--tn-red);
+  outline: 0;
+}
+
+.document-upload-button:disabled,
+.icon-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  transform: none;
 }
 
 .icon-action-button {
@@ -3027,6 +3160,16 @@ button:disabled {
     width: min(100%, 300px);
   }
 
+  .parser-settings__main {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 18px;
+  }
+
+  .parser-settings__controls {
+    justify-self: start;
+  }
+
   .settings-table-toolbar {
     grid-template-columns: 1fr;
   }
@@ -3057,6 +3200,31 @@ button:disabled {
   .comparison-page,
   .settings-page {
     width: min(100% - 28px, var(--tn-container));
+  }
+
+  .parser-settings {
+    border-radius: 9px;
+    padding: 20px;
+  }
+
+  .parser-settings__main {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .parser-settings__controls {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .parser-frequency-field__input {
+    width: 100%;
+  }
+
+  .parser-settings__button {
+    width: 100%;
+    justify-self: stretch;
   }
 
   .order-line {

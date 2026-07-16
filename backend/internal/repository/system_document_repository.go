@@ -38,10 +38,13 @@ func (r *SystemDocumentRepository) List(ctx context.Context, filter model.System
 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT d.id, d.order_id, o.name, d.system_catalog_id, s.position, s.code,
-			s.system_name, s.system_url, s.system_class, s.curator, d.comparison_selected, d.comment,
+			s.system_name, COALESCE(NULLIF(nav.system_url, ''), s.system_url), s.system_class, s.curator, d.comparison_selected, d.comment,
+			d.attachment_name, d.attachment_content_type, d.attachment_size,
 			d.created_at, d.updated_at
 		FROM system_documents d
 		JOIN system_catalog s ON s.id = d.system_catalog_id
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
 		JOIN orders o ON o.id = d.order_id
 		WHERE `+strings.Join(clauses, " AND ")+`
 		ORDER BY CASE WHEN BTRIM(d.comment) <> '' THEN 0 ELSE 1 END, LOWER(s.system_name), s.position, d.id
@@ -56,6 +59,7 @@ func (r *SystemDocumentRepository) List(ctx context.Context, filter model.System
 		var row model.SystemDocumentRow
 		if err := rows.Scan(&row.ID, &row.OrderID, &row.OrderName, &row.SystemCatalogID, &row.Position, &row.Code,
 			&row.SystemName, &row.SystemURL, &row.SystemClass, &row.Curator, &row.ComparisonSelected, &row.Comment,
+			&row.AttachmentName, &row.AttachmentType, &row.AttachmentSize,
 			&row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan system document: %w", err)
 		}
@@ -73,10 +77,13 @@ func (r *SystemDocumentRepository) List(ctx context.Context, filter model.System
 func (r *SystemDocumentRepository) History(ctx context.Context, code string, systemName string) ([]model.SystemDocumentRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT d.id, d.order_id, o.name, d.system_catalog_id, s.position, s.code,
-			s.system_name, s.system_url, s.system_class, s.curator, d.comparison_selected, d.comment,
+			s.system_name, COALESCE(NULLIF(nav.system_url, ''), s.system_url), s.system_class, s.curator, d.comparison_selected, d.comment,
+			d.attachment_name, d.attachment_content_type, d.attachment_size,
 			d.created_at, d.updated_at
 		FROM system_documents d
 		JOIN system_catalog s ON s.id = d.system_catalog_id
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
 		JOIN orders o ON o.id = d.order_id
 		WHERE s.code = $1 AND s.system_name = $2
 		ORDER BY o.created_at DESC, o.id DESC
@@ -91,6 +98,7 @@ func (r *SystemDocumentRepository) History(ctx context.Context, code string, sys
 		var row model.SystemDocumentRow
 		if err := rows.Scan(&row.ID, &row.OrderID, &row.OrderName, &row.SystemCatalogID, &row.Position, &row.Code,
 			&row.SystemName, &row.SystemURL, &row.SystemClass, &row.Curator, &row.ComparisonSelected, &row.Comment,
+			&row.AttachmentName, &row.AttachmentType, &row.AttachmentSize,
 			&row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan system document history: %w", err)
 		}
@@ -109,31 +117,34 @@ func (r *SystemDocumentRepository) loadCharacteristics(ctx context.Context, rows
 	if len(rows) == 0 {
 		return nil
 	}
-	byCatalogID := make(map[int64]*model.SystemDocumentRow, len(rows))
+	bySystemKey := make(map[string][]*model.SystemDocumentRow, len(rows))
 	args := make([]any, 0, len(rows))
 	placeholders := make([]string, 0, len(rows))
 	for index := range rows {
-		byCatalogID[rows[index].SystemCatalogID] = &rows[index]
-		args = append(args, rows[index].SystemCatalogID)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", index+1))
+		key := systemMetadataKey(rows[index].SystemName)
+		if _, exists := bySystemKey[key]; !exists {
+			args = append(args, key)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		bySystemKey[key] = append(bySystemKey[key], &rows[index])
 	}
 	result, err := r.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT system_catalog_id, position, name, value
-		FROM system_characteristics
-		WHERE system_catalog_id IN (%s)
-		ORDER BY system_catalog_id, position, id
+		SELECT system_key, position, name, value
+		FROM nav_system_characteristics
+		WHERE system_key IN (%s)
+		ORDER BY system_key, position
 	`, strings.Join(placeholders, ",")), args...)
 	if err != nil {
 		return fmt.Errorf("load system document characteristics: %w", err)
 	}
 	defer result.Close()
 	for result.Next() {
-		var catalogID int64
+		var systemKey string
 		var characteristic model.SystemCharacteristic
-		if err := result.Scan(&catalogID, &characteristic.Position, &characteristic.Name, &characteristic.Value); err != nil {
+		if err := result.Scan(&systemKey, &characteristic.Position, &characteristic.Name, &characteristic.Value); err != nil {
 			return fmt.Errorf("scan system document characteristic: %w", err)
 		}
-		if row := byCatalogID[catalogID]; row != nil {
+		for _, row := range bySystemKey[systemKey] {
 			row.Characteristics = append(row.Characteristics, characteristic)
 		}
 	}
@@ -153,13 +164,17 @@ func (r *SystemDocumentRepository) UpdateComment(ctx context.Context, id int64, 
 			RETURNING *
 		)
 		SELECT d.id, d.order_id, o.name, d.system_catalog_id, s.position, s.code,
-			s.system_name, s.system_url, s.system_class, s.curator, d.comparison_selected, d.comment,
+			s.system_name, COALESCE(NULLIF(nav.system_url, ''), s.system_url), s.system_class, s.curator, d.comparison_selected, d.comment,
+			d.attachment_name, d.attachment_content_type, d.attachment_size,
 			d.created_at, d.updated_at
 		FROM updated d
 		JOIN system_catalog s ON s.id = d.system_catalog_id
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
 		JOIN orders o ON o.id = d.order_id
 	`, id, orderID, comment).Scan(&row.ID, &row.OrderID, &row.OrderName, &row.SystemCatalogID, &row.Position, &row.Code,
 		&row.SystemName, &row.SystemURL, &row.SystemClass, &row.Curator, &row.ComparisonSelected, &row.Comment,
+		&row.AttachmentName, &row.AttachmentType, &row.AttachmentSize,
 		&row.CreatedAt, &row.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -168,6 +183,68 @@ func (r *SystemDocumentRepository) UpdateComment(ctx context.Context, id int64, 
 		return model.SystemDocumentRow{}, fmt.Errorf("update system document comment: %w", err)
 	}
 	return row, nil
+}
+
+func (r *SystemDocumentRepository) SaveAttachment(ctx context.Context, id int64, orderID int64, attachment model.SystemDocumentAttachment) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE system_documents
+		SET attachment_name = $3,
+			attachment_content_type = $4,
+			attachment_size = $5,
+			attachment_data = $6,
+			updated_at = NOW()
+		WHERE id = $1 AND order_id = $2
+	`, id, orderID, attachment.Name, attachment.ContentType, attachment.Size, attachment.Data)
+	if err != nil {
+		return fmt.Errorf("save system document attachment: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check saved system document attachment: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("system document not found")
+	}
+	return nil
+}
+
+func (r *SystemDocumentRepository) Attachment(ctx context.Context, id int64, orderID int64) (model.SystemDocumentAttachment, error) {
+	var attachment model.SystemDocumentAttachment
+	err := r.db.QueryRowContext(ctx, `
+		SELECT attachment_name, attachment_content_type, attachment_size, attachment_data
+		FROM system_documents
+		WHERE id = $1 AND order_id = $2 AND attachment_data IS NOT NULL AND attachment_name <> ''
+	`, id, orderID).Scan(&attachment.Name, &attachment.ContentType, &attachment.Size, &attachment.Data)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return model.SystemDocumentAttachment{}, fmt.Errorf("attachment not found")
+		}
+		return model.SystemDocumentAttachment{}, fmt.Errorf("load system document attachment: %w", err)
+	}
+	return attachment, nil
+}
+
+func (r *SystemDocumentRepository) DeleteAttachment(ctx context.Context, id int64, orderID int64) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE system_documents
+		SET attachment_name = '',
+			attachment_content_type = '',
+			attachment_size = 0,
+			attachment_data = NULL,
+			updated_at = NOW()
+		WHERE id = $1 AND order_id = $2
+	`, id, orderID)
+	if err != nil {
+		return fmt.Errorf("delete system document attachment: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check deleted system document attachment: %w", err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("system document not found")
+	}
+	return nil
 }
 
 func (r *SystemDocumentRepository) UpdateComparison(ctx context.Context, id int64, orderID int64, selected bool) error {

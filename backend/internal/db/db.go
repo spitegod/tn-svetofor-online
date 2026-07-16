@@ -78,6 +78,33 @@ CREATE TABLE IF NOT EXISTS nav_system_types (
 	position INTEGER NOT NULL,
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS nav_systems (
+	system_key TEXT PRIMARY KEY,
+	system_name TEXT NOT NULL,
+	system_url TEXT NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS nav_system_characteristics (
+	system_key TEXT NOT NULL REFERENCES nav_systems(system_key) ON DELETE CASCADE,
+	position INTEGER NOT NULL,
+	name TEXT NOT NULL,
+	value TEXT NOT NULL,
+	PRIMARY KEY (system_key, position)
+);
+
+CREATE INDEX IF NOT EXISTS idx_nav_system_characteristics_name ON nav_system_characteristics(name);
+
+CREATE TABLE IF NOT EXISTS nav_parser_settings (
+	id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
+	update_interval_days INTEGER NOT NULL DEFAULT 7 CHECK (update_interval_days BETWEEN 1 AND 365),
+	last_run_at TIMESTAMPTZ
+);
+
+INSERT INTO nav_parser_settings (id, update_interval_days)
+VALUES (TRUE, 7)
+ON CONFLICT (id) DO NOTHING;
 `
 
 	if _, err := database.ExecContext(ctx, query); err != nil {
@@ -123,6 +150,10 @@ CREATE INDEX IF NOT EXISTS idx_system_documents_order_id ON system_documents(ord
 CREATE INDEX IF NOT EXISTS idx_system_documents_catalog_id ON system_documents(system_catalog_id);
 
 ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS comparison_selected BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS attachment_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS attachment_content_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS attachment_size BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS attachment_data BYTEA;
 ALTER TABLE system_catalog ADD COLUMN IF NOT EXISTS document_initialized BOOLEAN NOT NULL DEFAULT FALSE;
 
 INSERT INTO system_documents (order_id, system_catalog_id)
@@ -133,6 +164,59 @@ WHERE NOT s.document_initialized AND NOT EXISTS (
 );
 
 UPDATE system_catalog SET document_initialized = TRUE WHERE NOT document_initialized;
+
+WITH ranked_sources AS (
+	SELECT
+		s.id,
+		LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g')) AS system_key,
+		s.system_name,
+		s.system_url,
+		ROW_NUMBER() OVER (
+			PARTITION BY LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
+			ORDER BY (SELECT COUNT(*) FROM system_characteristics c WHERE c.system_catalog_id = s.id) DESC,
+				s.imported_at DESC,
+				s.id DESC
+		) AS source_rank
+	FROM system_catalog s
+	WHERE NULLIF(BTRIM(s.system_url), '') IS NOT NULL
+		OR EXISTS (SELECT 1 FROM system_characteristics c WHERE c.system_catalog_id = s.id)
+), metadata_sources AS (
+	SELECT id, system_key, system_name, system_url
+	FROM ranked_sources
+	WHERE source_rank = 1
+)
+INSERT INTO nav_systems (system_key, system_name, system_url)
+SELECT system_key, system_name, system_url
+FROM metadata_sources
+ON CONFLICT (system_key) DO NOTHING;
+
+WITH ranked_sources AS (
+	SELECT
+		s.id,
+		LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g')) AS system_key,
+		ROW_NUMBER() OVER (
+			PARTITION BY LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
+			ORDER BY (SELECT COUNT(*) FROM system_characteristics c WHERE c.system_catalog_id = s.id) DESC,
+				s.imported_at DESC,
+				s.id DESC
+		) AS source_rank
+	FROM system_catalog s
+	WHERE EXISTS (SELECT 1 FROM system_characteristics c WHERE c.system_catalog_id = s.id)
+), metadata_sources AS (
+	SELECT id, system_key
+	FROM ranked_sources
+	WHERE source_rank = 1
+)
+INSERT INTO nav_system_characteristics (system_key, position, name, value)
+SELECT source.system_key, characteristic.position, characteristic.name, characteristic.value
+FROM metadata_sources source
+JOIN system_characteristics characteristic ON characteristic.system_catalog_id = source.id
+WHERE NOT EXISTS (
+	SELECT 1
+	FROM nav_system_characteristics existing
+	WHERE existing.system_key = source.system_key
+)
+ON CONFLICT (system_key, position) DO NOTHING;
 `
 
 	if _, err := database.ExecContext(ctx, ordersQuery); err != nil {

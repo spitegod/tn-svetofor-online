@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -22,8 +23,9 @@ import (
 const navBaseURL = "https://nav.tn.ru"
 
 type NavParserService struct {
-	repo   *repository.SystemCatalogRepository
-	client *http.Client
+	repo    *repository.SystemCatalogRepository
+	client  *http.Client
+	parseMu sync.Mutex
 }
 
 type navSystemLink struct {
@@ -46,18 +48,17 @@ func NewNavParserService(repo *repository.SystemCatalogRepository) *NavParserSer
 	}
 }
 
-func (s *NavParserService) Parse(ctx context.Context, orderID int64) (model.NavParseReport, error) {
-	if orderID <= 0 {
-		return model.NavParseReport{}, fmt.Errorf("invalid order id")
-	}
+func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, error) {
+	s.parseMu.Lock()
+	defer s.parseMu.Unlock()
 
-	rows, err := s.repo.ParserRows(ctx, orderID)
+	rows, err := s.repo.ParserRows(ctx)
 	if err != nil {
 		return model.NavParseReport{}, err
 	}
 	report := model.NavParseReport{Total: len(rows), NotFound: make([]string, 0)}
 	if len(rows) == 0 {
-		return report, nil
+		return report, s.repo.MarkNavParserRun(ctx)
 	}
 
 	links, err := s.crawlCatalog(ctx)
@@ -109,7 +110,7 @@ func (s *NavParserService) Parse(ctx context.Context, orderID int64) (model.NavP
 					for index := range characteristics {
 						characteristics[index].Position = index + 1
 					}
-					err = s.repo.SaveParsed(ctx, job.row.ID, job.link.URL, characteristics)
+					err = s.repo.SaveParsed(ctx, job.row.SystemName, job.link.URL, characteristics)
 				}
 				mu.Lock()
 				if err != nil {
@@ -133,8 +134,67 @@ func (s *NavParserService) Parse(ctx context.Context, orderID int64) (model.NavP
 	close(jobCh)
 	wg.Wait()
 	sort.Strings(report.NotFound)
+	if err := s.repo.MarkNavParserRun(ctx); err != nil {
+		return report, err
+	}
 
 	return report, nil
+}
+
+func (s *NavParserService) Settings(ctx context.Context) (model.NavParserSettings, error) {
+	settings, err := s.repo.NavParserSettings(ctx)
+	if err != nil {
+		return model.NavParserSettings{}, err
+	}
+	return withNextNavRun(settings), nil
+}
+
+func (s *NavParserService) UpdateInterval(ctx context.Context, days int) (model.NavParserSettings, error) {
+	if days < 1 || days > 365 {
+		return model.NavParserSettings{}, fmt.Errorf("update interval must be between 1 and 365 days")
+	}
+	settings, err := s.repo.UpdateNavParserInterval(ctx, days)
+	if err != nil {
+		return model.NavParserSettings{}, err
+	}
+	return withNextNavRun(settings), nil
+}
+
+func (s *NavParserService) RunScheduler(ctx context.Context) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+
+	s.runScheduledParseIfDue(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.runScheduledParseIfDue(ctx)
+		}
+	}
+}
+
+func (s *NavParserService) runScheduledParseIfDue(ctx context.Context) {
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		log.Printf("load NAV parser schedule: %v", err)
+		return
+	}
+	if settings.LastRunAt == nil || settings.NextRunAt == nil || time.Now().Before(*settings.NextRunAt) {
+		return
+	}
+	if _, err := s.Parse(ctx); err != nil {
+		log.Printf("scheduled NAV parsing failed: %v", err)
+	}
+}
+
+func withNextNavRun(settings model.NavParserSettings) model.NavParserSettings {
+	if settings.LastRunAt != nil {
+		nextRunAt := settings.LastRunAt.Add(time.Duration(settings.UpdateIntervalDays) * 24 * time.Hour)
+		settings.NextRunAt = &nextRunAt
+	}
+	return settings
 }
 
 func (s *NavParserService) crawlCatalog(ctx context.Context) ([]navSystemLink, error) {

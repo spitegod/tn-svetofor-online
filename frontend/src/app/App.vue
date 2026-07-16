@@ -58,6 +58,12 @@ type NavParseReport = {
   notFound: string[]
 }
 
+type NavParserSettings = {
+  updateIntervalDays: number
+  lastRunAt: string | null
+  nextRunAt: string | null
+}
+
 type SystemCatalogStats = {
   total: number
   recommended: number
@@ -87,6 +93,9 @@ type SystemDocumentRow = {
   curator: string
   comparisonSelected: boolean
   comment: string
+  attachmentName: string
+  attachmentType: string
+  attachmentSize: number
   createdAt: string
   updatedAt: string
   characteristics: SystemCharacteristic[]
@@ -148,6 +157,7 @@ const selectedOrderId = ref<number | null>(null)
 const comparisonOrderIds = ref<number[]>([])
 const comparisonCatalogByOrder = ref<Record<number, SystemDocumentRow[]>>({})
 const comparisonPendingIds = ref<number[]>([])
+const attachmentPendingIds = ref<number[]>([])
 const comparisonAllOrders = ref(true)
 const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
@@ -302,6 +312,10 @@ const isNavParsing = ref(false)
 const navParseMessage = ref('')
 const navParseError = ref('')
 const navParseNotFound = ref<string[]>([])
+const navParserIntervalDays = ref(7)
+const isNavSettingsSaving = ref(false)
+const navSettingsMessage = ref('')
+const navSettingsError = ref('')
 
 function selectedOrderName() {
   return orders.value.find((order) => order.id === selectedOrderId.value)?.name ?? 'Распоряжение не выбрано'
@@ -922,7 +936,7 @@ async function exportSystemCatalog() {
 }
 
 async function runNavParser() {
-  if (!selectedOrderId.value || isNavParsing.value) {
+  if (isNavParsing.value) {
     return
   }
 
@@ -931,8 +945,7 @@ async function runNavParser() {
   navParseError.value = ''
   navParseNotFound.value = []
   try {
-    const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
-    const response = await fetch(`${API_BASE_URL}/system-catalog/parse-nav?${query.toString()}`, { method: 'POST' })
+    const response = await fetch(`${API_BASE_URL}/system-catalog/parse-nav`, { method: 'POST' })
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
       throw new Error(payload?.error ?? 'Не удалось выполнить парсинг nav.tn.ru')
@@ -942,11 +955,51 @@ async function runNavParser() {
     navParseMessage.value = `Обновлено ${report.updated} из ${report.total}. Найдено: ${report.found}, не найдено: ${report.notFound.length}, ошибок: ${report.failed}.`
     navParseNotFound.value = report.notFound
     selectedClassificationFilters.value = {}
-    await Promise.all([loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
+    await Promise.all([loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings()])
   } catch (error) {
     navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
   } finally {
     isNavParsing.value = false
+  }
+}
+
+async function loadNavParserSettings() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/nav-parser/settings`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить настройки парсера')
+    }
+    const settings: NavParserSettings = await response.json()
+    navParserIntervalDays.value = settings.updateIntervalDays
+    navSettingsError.value = ''
+  } catch (error) {
+    navSettingsError.value = error instanceof Error ? error.message : 'Не удалось загрузить настройки парсера'
+  }
+}
+
+async function saveNavParserSettings() {
+  const days = Math.min(365, Math.max(1, Math.round(Number(navParserIntervalDays.value) || 1)))
+  navParserIntervalDays.value = days
+  isNavSettingsSaving.value = true
+  navSettingsMessage.value = ''
+  navSettingsError.value = ''
+  try {
+    const response = await fetch(`${API_BASE_URL}/nav-parser/settings`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updateIntervalDays: days }),
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось сохранить частоту обновления')
+    }
+    const settings: NavParserSettings = await response.json()
+    navParserIntervalDays.value = settings.updateIntervalDays
+    navSettingsMessage.value = 'Частота обновления сохранена'
+  } catch (error) {
+    navSettingsError.value = error instanceof Error ? error.message : 'Не удалось сохранить частоту обновления'
+  } finally {
+    isNavSettingsSaving.value = false
   }
 }
 
@@ -1073,7 +1126,7 @@ function setPage(page: string) {
   } else if (page === 'classification') {
     void loadClassificationCatalog()
   } else if (page === 'settings') {
-    void Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadDocumentTable()])
+    void Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadDocumentTable(), loadNavParserSettings()])
   }
 }
 
@@ -1292,6 +1345,75 @@ async function saveDocumentComment(row: SystemDocumentRow) {
   }
 }
 
+function systemDocumentAttachmentUrl(row: SystemDocumentRow) {
+  const query = new URLSearchParams({ orderId: String(row.orderId) })
+  return `${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`
+}
+
+function openAttachmentPicker(row: SystemDocumentRow) {
+  document.getElementById(`document-attachment-${row.id}`)?.click()
+}
+
+async function uploadSystemDocumentAttachment(row: SystemDocumentRow, event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file || attachmentPendingIds.value.includes(row.id)) {
+    return
+  }
+  if (file.size > 25 * 1024 * 1024) {
+    documentError.value = 'Размер документа не должен превышать 25 МБ'
+    input.value = ''
+    return
+  }
+
+  attachmentPendingIds.value = [...attachmentPendingIds.value, row.id]
+  documentError.value = ''
+  try {
+    const query = new URLSearchParams({ orderId: String(row.orderId) })
+    const form = new FormData()
+    form.append('file', file)
+    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось загрузить документ')
+    }
+    await Promise.all([loadDocumentTable(), loadSystemDocuments()])
+  } catch (error) {
+    documentError.value = error instanceof Error ? error.message : 'Не удалось загрузить документ'
+  } finally {
+    attachmentPendingIds.value = attachmentPendingIds.value.filter((id) => id !== row.id)
+    input.value = ''
+  }
+}
+
+async function deleteSystemDocumentAttachment(row: SystemDocumentRow) {
+  if (!row.attachmentName || attachmentPendingIds.value.includes(row.id) ||
+      !window.confirm(`Удалить документ «${row.attachmentName}»?`)) {
+    return
+  }
+
+  attachmentPendingIds.value = [...attachmentPendingIds.value, row.id]
+  documentError.value = ''
+  try {
+    const query = new URLSearchParams({ orderId: String(row.orderId) })
+    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось удалить документ')
+    }
+    await Promise.all([loadDocumentTable(), loadSystemDocuments()])
+  } catch (error) {
+    documentError.value = error instanceof Error ? error.message : 'Не удалось удалить документ'
+  } finally {
+    attachmentPendingIds.value = attachmentPendingIds.value.filter((id) => id !== row.id)
+  }
+}
+
 async function toggleSystemComparison(row: SystemDocumentRow, event: Event) {
   if (!selectedOrderId.value || comparisonPendingIds.value.includes(row.id)) {
     return
@@ -1369,32 +1491,6 @@ async function toggleAllSystemComparisons(event: Event) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось сохранить массовый выбор'
   } finally {
     isBulkComparisonUpdating.value = false
-  }
-}
-
-async function deleteSystemDocument(row: SystemDocumentRow) {
-  if (!selectedOrderId.value || !window.confirm(`Удалить «${row.systemName}» из таблицы 3 текущего распоряжения?`)) {
-    return
-  }
-  const commentTimer = documentCommentTimers.get(row.id)
-  if (commentTimer) {
-    window.clearTimeout(commentTimer)
-    documentCommentTimers.delete(row.id)
-  }
-  documentError.value = ''
-  try {
-    const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
-    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}?${query.toString()}`, { method: 'DELETE' })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      throw new Error(payload?.error ?? 'Не удалось удалить запись таблицы 3')
-    }
-    await Promise.all([loadDocumentTable(), loadSystemDocuments()])
-    if (selectedHistorySystem.value?.id === row.id) {
-      closeSystemHistory()
-    }
-  } catch (error) {
-    documentError.value = error instanceof Error ? error.message : 'Не удалось удалить запись таблицы 3'
   }
 }
 
@@ -1528,7 +1624,7 @@ onMounted(async () => {
   window.addEventListener('resize', updateClassificationCardColumns)
   window.addEventListener('scroll', updateScrollTopVisibility, { passive: true })
   await loadOrders()
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings()])
 })
 
 onBeforeUnmount(() => {
@@ -2362,11 +2458,36 @@ onBeforeUnmount(() => {
 
       <section v-else-if="activePage === 'settings'" class="settings-page">
         <section class="settings-section parser-settings" aria-labelledby="parser-settings-title">
-          <h1 id="parser-settings-title">Парсинг навигатора</h1>
-          <p>Загрузить с nav.tn.ru ссылки и характеристики систем для БД «{{ selectedOrderName() }}».</p>
-          <button class="import-button parser-settings__button" type="button" :disabled="isNavParsing || !selectedOrderId" @click="runNavParser">
-            {{ isNavParsing ? 'Парсинг выполняется…' : 'Запустить парсер' }}
-          </button>
+          <div class="parser-settings__main">
+            <div class="parser-settings__content">
+              <h1 id="parser-settings-title">Парсинг навигатора</h1>
+              <p>Обновляет ссылки, типы и характеристики систем с nav.tn.ru независимо от выбранного распоряжения.</p>
+            </div>
+            <div class="parser-settings__controls">
+              <label class="parser-frequency-field">
+                <span>Частота обновления</span>
+                <span class="parser-frequency-field__input">
+                  <input
+                    v-model.number="navParserIntervalDays"
+                    type="number"
+                    min="1"
+                    max="365"
+                    step="1"
+                    :disabled="isNavSettingsSaving"
+                    aria-label="Частота обновления парсера в днях"
+                    @change="saveNavParserSettings"
+                  />
+                  <span>дней</span>
+                </span>
+              </label>
+              <button class="import-button parser-settings__button" type="button" :disabled="isNavParsing" @click="runNavParser">
+                {{ isNavParsing ? 'Парсинг выполняется…' : 'Запустить парсер' }}
+              </button>
+            </div>
+          </div>
+          <p class="parser-settings__hint">Автоматическое обновление начнёт отсчитываться после первого успешного запуска.</p>
+          <p v-if="navSettingsError" class="table-message table-message--error">{{ navSettingsError }}</p>
+          <p v-else-if="navSettingsMessage" class="table-message table-message--success">{{ navSettingsMessage }}</p>
           <p v-if="navParseError" class="table-message table-message--error">{{ navParseError }}</p>
           <p v-else-if="navParseMessage" class="table-message table-message--success">{{ navParseMessage }}</p>
           <details v-if="navParseNotFound.length" class="parser-settings__not-found">
@@ -2377,9 +2498,12 @@ onBeforeUnmount(() => {
           </details>
         </section>
 
-        <section class="settings-section" aria-labelledby="orders-db-title">
+        <section class="settings-section orders-settings" aria-labelledby="orders-db-title">
           <div class="settings-section__header">
-            <h2 id="orders-db-title">Управление БД Распоряжений</h2>
+            <div>
+              <span class="settings-section__eyebrow">Распоряжения</span>
+              <h2 id="orders-db-title">Управление базами данных</h2>
+            </div>
           </div>
 
           <div class="systems-table settings-orders-table settings-table-scroll">
@@ -2645,10 +2769,43 @@ onBeforeUnmount(() => {
                         @blur="saveDocumentComment(row)"
                       />
                     </td>
-                    <td class="document-empty-cell">—</td>
+                    <td>
+                      <a
+                        v-if="row.attachmentName"
+                        class="settings-document-link"
+                        :href="systemDocumentAttachmentUrl(row)"
+                        target="_blank"
+                        rel="noreferrer"
+                        :title="`Открыть ${row.attachmentName}`"
+                      >
+                        <img :src="folderIcon" alt="" aria-hidden="true" />
+                        <span>{{ row.attachmentName }}</span>
+                      </a>
+                      <span v-else class="document-empty-cell">—</span>
+                    </td>
                     <td>
                       <div class="document-actions">
-                        <button class="icon-action-button icon-action-button--danger" type="button" :aria-label="`Удалить ${row.systemName} из таблицы 3`" @click="deleteSystemDocument(row)">
+                        <input
+                          :id="`document-attachment-${row.id}`"
+                          class="visually-hidden-input"
+                          type="file"
+                          @change="uploadSystemDocumentAttachment(row, $event)"
+                        />
+                        <button
+                          class="document-upload-button"
+                          type="button"
+                          :disabled="attachmentPendingIds.includes(row.id)"
+                          @click="openAttachmentPicker(row)"
+                        >
+                          {{ attachmentPendingIds.includes(row.id) ? 'Загрузка…' : row.attachmentName ? 'Изменить документ' : 'Загрузить' }}
+                        </button>
+                        <button
+                          class="icon-action-button icon-action-button--danger"
+                          type="button"
+                          :disabled="!row.attachmentName || attachmentPendingIds.includes(row.id)"
+                          :aria-label="row.attachmentName ? `Удалить документ ${row.attachmentName}` : 'Документ не загружен'"
+                          @click="deleteSystemDocumentAttachment(row)"
+                        >
                           <img :src="trashIcon" alt="" aria-hidden="true" />
                         </button>
                       </div>
@@ -2710,7 +2867,13 @@ onBeforeUnmount(() => {
                   <tr v-for="row in systemHistoryRows.slice(0, 1)" :key="`history-current-${row.id}`">
                     <td>{{ row.orderName }}</td>
                     <td :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</td>
-                    <td class="document-empty-cell">—</td>
+                    <td>
+                      <a v-if="row.attachmentName" class="settings-document-link" :href="systemDocumentAttachmentUrl(row)" target="_blank" rel="noreferrer">
+                        <img :src="folderIcon" alt="" aria-hidden="true" />
+                        <span>{{ row.attachmentName }}</span>
+                      </a>
+                      <span v-else class="document-empty-cell">—</span>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -2728,7 +2891,13 @@ onBeforeUnmount(() => {
                     <tr v-for="row in systemHistoryRows.slice(1)" :key="`history-${row.id}`">
                       <td>{{ row.orderName }}</td>
                       <td :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</td>
-                      <td class="document-empty-cell">—</td>
+                      <td>
+                        <a v-if="row.attachmentName" class="settings-document-link" :href="systemDocumentAttachmentUrl(row)" target="_blank" rel="noreferrer">
+                          <img :src="folderIcon" alt="" aria-hidden="true" />
+                          <span>{{ row.attachmentName }}</span>
+                        </a>
+                        <span v-else class="document-empty-cell">—</span>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
