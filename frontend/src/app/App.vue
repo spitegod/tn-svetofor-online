@@ -1156,6 +1156,12 @@ async function importSystemCatalogFile(event: Event) {
 
 async function exportSystemCatalog() {
   const query = buildSystemCatalogQuery()
+  if (selectedConstructionType.value !== 'Все') {
+    query.set('constructionType', selectedConstructionType.value)
+  }
+  if (selectedSystemTypeSlug.value) {
+    query.set('systemType', selectedSystemType.value.name)
+  }
   const response = await fetch(`${API_BASE_URL}/system-documents/export?${query.toString()}`)
   if (!response.ok) {
     systemCatalogError.value = 'Не удалось экспортировать таблицу 2'
