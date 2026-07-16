@@ -150,6 +150,10 @@ CREATE INDEX IF NOT EXISTS idx_system_documents_order_id ON system_documents(ord
 CREATE INDEX IF NOT EXISTS idx_system_documents_catalog_id ON system_documents(system_catalog_id);
 
 ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS comparison_selected BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS attachment_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS attachment_content_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS attachment_size BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE system_documents ADD COLUMN IF NOT EXISTS attachment_data BYTEA;
 ALTER TABLE system_catalog ADD COLUMN IF NOT EXISTS document_initialized BOOLEAN NOT NULL DEFAULT FALSE;
 
 INSERT INTO system_documents (order_id, system_catalog_id)

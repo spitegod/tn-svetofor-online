@@ -3,8 +3,11 @@ package http
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"tn/backend/internal/model"
@@ -43,6 +46,9 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("GET /api/system-documents/export", router.exportSystemDocuments)
 	mux.HandleFunc("GET /api/system-documents/history", router.systemDocumentHistory)
 	mux.HandleFunc("PATCH /api/system-documents/{id}", router.updateSystemDocument)
+	mux.HandleFunc("POST /api/system-documents/{id}/attachment", router.uploadSystemDocumentAttachment)
+	mux.HandleFunc("GET /api/system-documents/{id}/attachment", router.getSystemDocumentAttachment)
+	mux.HandleFunc("DELETE /api/system-documents/{id}/attachment", router.deleteSystemDocumentAttachment)
 	mux.HandleFunc("PATCH /api/system-documents/{id}/comparison", router.updateSystemDocumentComparison)
 	mux.HandleFunc("PATCH /api/system-documents/comparison", router.updateSystemDocumentComparisonBulk)
 	mux.HandleFunc("DELETE /api/system-documents/{id}", router.deleteSystemDocument)
@@ -99,6 +105,83 @@ func (r *Router) updateSystemDocument(w http.ResponseWriter, request *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
+}
+
+func (r *Router) uploadSystemDocumentAttachment(w http.ResponseWriter, request *http.Request) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
+		return
+	}
+	request.Body = http.MaxBytesReader(w, request.Body, service.MaxSystemDocumentAttachmentSize+(1<<20))
+	if err := request.ParseMultipartForm(service.MaxSystemDocumentAttachmentSize); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("read attachment: %w", err))
+		return
+	}
+	if request.MultipartForm != nil {
+		defer request.MultipartForm.RemoveAll()
+	}
+	file, header, err := request.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("attachment file is required: %w", err))
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, service.MaxSystemDocumentAttachmentSize+1))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("read attachment file: %w", err))
+		return
+	}
+	contentType := header.Header.Get("Content-Type")
+	if contentType == "" && len(data) > 0 {
+		contentType = http.DetectContentType(data)
+	}
+	attachment := model.SystemDocumentAttachment{
+		Name:        header.Filename,
+		ContentType: contentType,
+		Data:        data,
+	}
+	if err := r.systemDocuments.SaveAttachment(request.Context(), id, orderIDFromRequest(request), attachment); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (r *Router) getSystemDocumentAttachment(w http.ResponseWriter, request *http.Request) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
+		return
+	}
+	attachment, err := r.systemDocuments.Attachment(request.Context(), id, orderIDFromRequest(request))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	disposition := "attachment"
+	if attachment.ContentType == "application/pdf" || attachment.ContentType == "text/plain" || strings.HasPrefix(attachment.ContentType, "image/") {
+		disposition = "inline"
+	}
+	w.Header().Set("Content-Type", attachment.ContentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(attachment.Size, 10))
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": attachment.Name}))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(attachment.Data)
+}
+
+func (r *Router) deleteSystemDocumentAttachment(w http.ResponseWriter, request *http.Request) {
+	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
+		return
+	}
+	if err := r.systemDocuments.DeleteAttachment(request.Context(), id, orderIDFromRequest(request)); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (r *Router) deleteSystemDocument(w http.ResponseWriter, request *http.Request) {

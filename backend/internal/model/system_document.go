@@ -15,9 +15,19 @@ type SystemDocumentRow struct {
 	Curator            string                 `json:"curator"`
 	ComparisonSelected bool                   `json:"comparisonSelected"`
 	Comment            string                 `json:"comment"`
+	AttachmentName     string                 `json:"attachmentName"`
+	AttachmentType     string                 `json:"attachmentType"`
+	AttachmentSize     int64                  `json:"attachmentSize"`
 	CreatedAt          time.Time              `json:"createdAt"`
 	UpdatedAt          time.Time              `json:"updatedAt"`
 	Characteristics    []SystemCharacteristic `json:"characteristics"`
+}
+
+type SystemDocumentAttachment struct {
+	Name        string
+	ContentType string
+	Size        int64
+	Data        []byte
 }
 
 type SystemDocumentList struct {

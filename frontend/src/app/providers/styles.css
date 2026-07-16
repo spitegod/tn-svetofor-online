@@ -2479,18 +2479,25 @@ button:disabled {
 
 .settings-docs-table th:nth-child(4),
 .settings-docs-table td:nth-child(4) {
-  width: 150px;
+  width: 230px;
   text-align: center;
 }
 
 .settings-document-link {
   display: inline-flex;
+  max-width: 100%;
   align-items: center;
   gap: 8px;
   color: var(--tn-ink);
   font-size: 13px;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.settings-document-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-document-link img {
@@ -2504,6 +2511,34 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: 8px;
+}
+
+.document-upload-button {
+  min-height: 30px;
+  border: 1px solid #cfd6e0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--tn-ink);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 11px;
+  white-space: nowrap;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.document-upload-button:hover,
+.document-upload-button:focus-visible {
+  border-color: #aeb8c6;
+  background: #f5f7fa;
+  color: var(--tn-red);
+  outline: 0;
+}
+
+.document-upload-button:disabled,
+.icon-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+  transform: none;
 }
 
 .icon-action-button {

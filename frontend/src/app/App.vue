@@ -93,6 +93,9 @@ type SystemDocumentRow = {
   curator: string
   comparisonSelected: boolean
   comment: string
+  attachmentName: string
+  attachmentType: string
+  attachmentSize: number
   createdAt: string
   updatedAt: string
   characteristics: SystemCharacteristic[]
@@ -154,6 +157,7 @@ const selectedOrderId = ref<number | null>(null)
 const comparisonOrderIds = ref<number[]>([])
 const comparisonCatalogByOrder = ref<Record<number, SystemDocumentRow[]>>({})
 const comparisonPendingIds = ref<number[]>([])
+const attachmentPendingIds = ref<number[]>([])
 const comparisonAllOrders = ref(true)
 const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
@@ -1341,6 +1345,75 @@ async function saveDocumentComment(row: SystemDocumentRow) {
   }
 }
 
+function systemDocumentAttachmentUrl(row: SystemDocumentRow) {
+  const query = new URLSearchParams({ orderId: String(row.orderId) })
+  return `${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`
+}
+
+function openAttachmentPicker(row: SystemDocumentRow) {
+  document.getElementById(`document-attachment-${row.id}`)?.click()
+}
+
+async function uploadSystemDocumentAttachment(row: SystemDocumentRow, event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file || attachmentPendingIds.value.includes(row.id)) {
+    return
+  }
+  if (file.size > 25 * 1024 * 1024) {
+    documentError.value = 'Размер документа не должен превышать 25 МБ'
+    input.value = ''
+    return
+  }
+
+  attachmentPendingIds.value = [...attachmentPendingIds.value, row.id]
+  documentError.value = ''
+  try {
+    const query = new URLSearchParams({ orderId: String(row.orderId) })
+    const form = new FormData()
+    form.append('file', file)
+    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось загрузить документ')
+    }
+    await Promise.all([loadDocumentTable(), loadSystemDocuments()])
+  } catch (error) {
+    documentError.value = error instanceof Error ? error.message : 'Не удалось загрузить документ'
+  } finally {
+    attachmentPendingIds.value = attachmentPendingIds.value.filter((id) => id !== row.id)
+    input.value = ''
+  }
+}
+
+async function deleteSystemDocumentAttachment(row: SystemDocumentRow) {
+  if (!row.attachmentName || attachmentPendingIds.value.includes(row.id) ||
+      !window.confirm(`Удалить документ «${row.attachmentName}»?`)) {
+    return
+  }
+
+  attachmentPendingIds.value = [...attachmentPendingIds.value, row.id]
+  documentError.value = ''
+  try {
+    const query = new URLSearchParams({ orderId: String(row.orderId) })
+    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось удалить документ')
+    }
+    await Promise.all([loadDocumentTable(), loadSystemDocuments()])
+  } catch (error) {
+    documentError.value = error instanceof Error ? error.message : 'Не удалось удалить документ'
+  } finally {
+    attachmentPendingIds.value = attachmentPendingIds.value.filter((id) => id !== row.id)
+  }
+}
+
 async function toggleSystemComparison(row: SystemDocumentRow, event: Event) {
   if (!selectedOrderId.value || comparisonPendingIds.value.includes(row.id)) {
     return
@@ -1418,32 +1491,6 @@ async function toggleAllSystemComparisons(event: Event) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось сохранить массовый выбор'
   } finally {
     isBulkComparisonUpdating.value = false
-  }
-}
-
-async function deleteSystemDocument(row: SystemDocumentRow) {
-  if (!selectedOrderId.value || !window.confirm(`Удалить «${row.systemName}» из таблицы 3 текущего распоряжения?`)) {
-    return
-  }
-  const commentTimer = documentCommentTimers.get(row.id)
-  if (commentTimer) {
-    window.clearTimeout(commentTimer)
-    documentCommentTimers.delete(row.id)
-  }
-  documentError.value = ''
-  try {
-    const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
-    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}?${query.toString()}`, { method: 'DELETE' })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      throw new Error(payload?.error ?? 'Не удалось удалить запись таблицы 3')
-    }
-    await Promise.all([loadDocumentTable(), loadSystemDocuments()])
-    if (selectedHistorySystem.value?.id === row.id) {
-      closeSystemHistory()
-    }
-  } catch (error) {
-    documentError.value = error instanceof Error ? error.message : 'Не удалось удалить запись таблицы 3'
   }
 }
 
@@ -2722,10 +2769,43 @@ onBeforeUnmount(() => {
                         @blur="saveDocumentComment(row)"
                       />
                     </td>
-                    <td class="document-empty-cell">—</td>
+                    <td>
+                      <a
+                        v-if="row.attachmentName"
+                        class="settings-document-link"
+                        :href="systemDocumentAttachmentUrl(row)"
+                        target="_blank"
+                        rel="noreferrer"
+                        :title="`Открыть ${row.attachmentName}`"
+                      >
+                        <img :src="folderIcon" alt="" aria-hidden="true" />
+                        <span>{{ row.attachmentName }}</span>
+                      </a>
+                      <span v-else class="document-empty-cell">—</span>
+                    </td>
                     <td>
                       <div class="document-actions">
-                        <button class="icon-action-button icon-action-button--danger" type="button" :aria-label="`Удалить ${row.systemName} из таблицы 3`" @click="deleteSystemDocument(row)">
+                        <input
+                          :id="`document-attachment-${row.id}`"
+                          class="visually-hidden-input"
+                          type="file"
+                          @change="uploadSystemDocumentAttachment(row, $event)"
+                        />
+                        <button
+                          class="document-upload-button"
+                          type="button"
+                          :disabled="attachmentPendingIds.includes(row.id)"
+                          @click="openAttachmentPicker(row)"
+                        >
+                          {{ attachmentPendingIds.includes(row.id) ? 'Загрузка…' : row.attachmentName ? 'Изменить документ' : 'Загрузить' }}
+                        </button>
+                        <button
+                          class="icon-action-button icon-action-button--danger"
+                          type="button"
+                          :disabled="!row.attachmentName || attachmentPendingIds.includes(row.id)"
+                          :aria-label="row.attachmentName ? `Удалить документ ${row.attachmentName}` : 'Документ не загружен'"
+                          @click="deleteSystemDocumentAttachment(row)"
+                        >
                           <img :src="trashIcon" alt="" aria-hidden="true" />
                         </button>
                       </div>
@@ -2787,7 +2867,13 @@ onBeforeUnmount(() => {
                   <tr v-for="row in systemHistoryRows.slice(0, 1)" :key="`history-current-${row.id}`">
                     <td>{{ row.orderName }}</td>
                     <td :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</td>
-                    <td class="document-empty-cell">—</td>
+                    <td>
+                      <a v-if="row.attachmentName" class="settings-document-link" :href="systemDocumentAttachmentUrl(row)" target="_blank" rel="noreferrer">
+                        <img :src="folderIcon" alt="" aria-hidden="true" />
+                        <span>{{ row.attachmentName }}</span>
+                      </a>
+                      <span v-else class="document-empty-cell">—</span>
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -2805,7 +2891,13 @@ onBeforeUnmount(() => {
                     <tr v-for="row in systemHistoryRows.slice(1)" :key="`history-${row.id}`">
                       <td>{{ row.orderName }}</td>
                       <td :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</td>
-                      <td class="document-empty-cell">—</td>
+                      <td>
+                        <a v-if="row.attachmentName" class="settings-document-link" :href="systemDocumentAttachmentUrl(row)" target="_blank" rel="noreferrer">
+                          <img :src="folderIcon" alt="" aria-hidden="true" />
+                          <span>{{ row.attachmentName }}</span>
+                        </a>
+                        <span v-else class="document-empty-cell">—</span>
+                      </td>
                     </tr>
                   </tbody>
                 </table>

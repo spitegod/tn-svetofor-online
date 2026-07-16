@@ -31,10 +31,15 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 	type documentState struct {
 		comment            string
 		comparisonSelected bool
+		attachmentName     string
+		attachmentType     string
+		attachmentSize     int64
+		attachmentData     []byte
 	}
 	documentStates := make(map[string]documentState)
 	existing, queryErr := tx.QueryContext(ctx, `
-		SELECT s.code, s.system_name, d.comment, d.comparison_selected
+		SELECT s.code, s.system_name, d.comment, d.comparison_selected,
+			d.attachment_name, d.attachment_content_type, d.attachment_size, d.attachment_data
 		FROM system_documents d
 		JOIN system_catalog s ON s.id = d.system_catalog_id
 		WHERE d.order_id = $1
@@ -45,7 +50,8 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 	for existing.Next() {
 		var code, name string
 		var state documentState
-		if err = existing.Scan(&code, &name, &state.comment, &state.comparisonSelected); err != nil {
+		if err = existing.Scan(&code, &name, &state.comment, &state.comparisonSelected,
+			&state.attachmentName, &state.attachmentType, &state.attachmentSize, &state.attachmentData); err != nil {
 			existing.Close()
 			return fmt.Errorf("scan preserved system document comment: %w", err)
 		}
@@ -76,9 +82,13 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 			return fmt.Errorf("insert system catalog row %q: %w", row.Code, err)
 		}
 		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO system_documents (order_id, system_catalog_id, comment, comparison_selected)
-			VALUES ($1, $2, $3, $4)
-		`, orderID, systemCatalogID, state.comment, state.comparisonSelected); err != nil {
+			INSERT INTO system_documents (
+				order_id, system_catalog_id, comment, comparison_selected,
+				attachment_name, attachment_content_type, attachment_size, attachment_data
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`, orderID, systemCatalogID, state.comment, state.comparisonSelected,
+			state.attachmentName, state.attachmentType, state.attachmentSize, state.attachmentData); err != nil {
 			return fmt.Errorf("insert system document row %q: %w", row.Code, err)
 		}
 	}
