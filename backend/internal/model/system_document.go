@@ -38,11 +38,13 @@ type SystemDocumentList struct {
 }
 
 type SystemDocumentFilter struct {
-	OrderID        int64
-	Query          string
-	SystemClass    string
-	Curator        string
-	ComparisonOnly bool
+	OrderID          int64
+	Query            string
+	SystemClass      string
+	Curator          string
+	ConstructionType string
+	SystemType       string
+	ComparisonOnly   bool
 }
 
 type SystemDocumentKey struct {

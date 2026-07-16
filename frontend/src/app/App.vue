@@ -1156,6 +1156,12 @@ async function importSystemCatalogFile(event: Event) {
 
 async function exportSystemCatalog() {
   const query = buildSystemCatalogQuery()
+  if (selectedConstructionType.value !== 'Все') {
+    query.set('constructionType', selectedConstructionType.value)
+  }
+  if (selectedSystemTypeSlug.value) {
+    query.set('systemType', selectedSystemType.value.name)
+  }
   const response = await fetch(`${API_BASE_URL}/system-documents/export?${query.toString()}`)
   if (!response.ok) {
     systemCatalogError.value = 'Не удалось экспортировать таблицу 2'
@@ -2392,7 +2398,7 @@ onBeforeUnmount(() => {
             </span>
           </label>
 
-          <div class="select-field">
+          <div class="select-field systems-class-filter" :style="{ '--class-accent': statusAccentColor(selectedSystemCatalogClass) }">
             <span>Класс</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'class', 'is-filtered': selectedSystemCatalogClass !== 'Все' }">
               <button class="custom-select__button" type="button" @click.stop="toggleSelect('class')">
@@ -2529,14 +2535,14 @@ onBeforeUnmount(() => {
                 <td class="empty-table-cell" colspan="5">В таблице 3 этого распоряжения пока нет систем</td>
               </tr>
               <tr v-for="row in visibleSystemDocumentRows()" :key="row.id" tabindex="-1">
-                <td>{{ row.code }}</td>
-                <td>
+                <td class="systems-code-cell"><span>{{ row.code }}</span></td>
+                <td class="systems-name-cell">
                   <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
                     {{ row.systemName }}
                   </a>
                   <span v-else>{{ row.systemName }}</span>
                 </td>
-                <td class="status-cell systems-catalog-status-cell">
+                <td :class="`status-cell systems-catalog-status-cell systems-catalog-status-cell--${classModifier(row.systemClass)}`">
                   <span :class="`systems-class-badge systems-class-badge--${classModifier(row.systemClass)}`">
                     <i aria-hidden="true" />
                     {{ row.systemClass }}
@@ -2545,7 +2551,7 @@ onBeforeUnmount(() => {
                     <Folder :size="19" :stroke-width="2" aria-hidden="true" />
                   </button>
                 </td>
-                <td>{{ row.curator }}</td>
+                <td class="systems-curator-cell">{{ row.curator }}</td>
                 <td>
                   <label class="compare-checkbox" :class="{ 'is-pending': comparisonPendingIds.includes(row.id) }">
                     <input

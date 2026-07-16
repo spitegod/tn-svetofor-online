@@ -531,11 +531,13 @@ func systemCatalogFilterFromRequest(request *http.Request) model.SystemCatalogFi
 func systemDocumentFilterFromRequest(request *http.Request) model.SystemDocumentFilter {
 	query := request.URL.Query()
 	filter := model.SystemDocumentFilter{
-		OrderID:        orderIDFromRequest(request),
-		Query:          query.Get("q"),
-		SystemClass:    query.Get("class"),
-		Curator:        query.Get("curator"),
-		ComparisonOnly: query.Get("comparison") == "true",
+		OrderID:          orderIDFromRequest(request),
+		Query:            query.Get("q"),
+		SystemClass:      query.Get("class"),
+		Curator:          query.Get("curator"),
+		ConstructionType: query.Get("constructionType"),
+		SystemType:       query.Get("systemType"),
+		ComparisonOnly:   query.Get("comparison") == "true",
 	}
 	if filter.SystemClass == "Все" {
 		filter.SystemClass = ""
