@@ -105,6 +105,11 @@ func (r *ClassificationRepository) List(ctx context.Context, filter model.Classi
 		clauses = append(clauses, fmt.Sprintf("LOWER(system_name) LIKE $%d", len(args)))
 	}
 
+	if filter.ConstructionType != "" {
+		args = append(args, filter.ConstructionType)
+		clauses = append(clauses, fmt.Sprintf("construction_type = $%d", len(args)))
+	}
+
 	if filter.ClassBefore != "" {
 		args = append(args, filter.ClassBefore)
 		clauses = append(clauses, fmt.Sprintf("class_before = $%d", len(args)))
