@@ -288,6 +288,7 @@ const openedClassificationSystemId = ref<number | null>(null)
 const classificationCardColumns = ref(3)
 const openedClassificationFilter = ref<string | null>(null)
 const selectedClassificationFilters = ref<Record<string, string>>({})
+const classificationFilterSearch = ref('')
 const systemTypeSourceRows = computed(() => activePage.value === 'systems' ? systemDocumentRows.value : classificationCatalogRows.value)
 const systemTypes = computed(() => [{ slug: '', name: 'Все системы', imageUrl: '', position: 0 }, ...parsedSystemTypes.value].map((type) => ({
   ...type,
@@ -320,6 +321,11 @@ const classificationFilterGroups = computed(() => {
     }
   }
   return [...names]
+})
+const visibleClassificationFilterGroups = computed(() => {
+  const query = classificationFilterSearch.value.trim().toLocaleLowerCase('ru-RU')
+  if (!query) return classificationFilterGroups.value
+  return classificationFilterGroups.value.filter((name) => name.toLocaleLowerCase('ru-RU').includes(query))
 })
 const selectedClassificationFilterCount = computed(() => Object.keys(selectedClassificationFilters.value).length)
 const classificationSystems = computed(() => {
@@ -1506,6 +1512,18 @@ function clearClassificationFilters() {
   classificationCatalogPage.value = 1
   openedClassificationFilter.value = null
   openedClassificationSystemId.value = null
+}
+
+function removeClassificationFilter(name: string) {
+  const next = { ...selectedClassificationFilters.value }
+  delete next[name]
+  selectedClassificationFilters.value = next
+  classificationCatalogPage.value = 1
+  openedClassificationSystemId.value = null
+}
+
+function collapseClassificationFilters() {
+  openedClassificationFilter.value = null
 }
 
 function classificationRowPositions() {
@@ -2940,11 +2958,44 @@ onBeforeUnmount(() => {
                 Сбросить
               </button>
             </header>
+            <div class="classification-sidebar__tools">
+              <label class="classification-sidebar__search">
+                <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
+                <input v-model="classificationFilterSearch" type="search" placeholder="Найти характеристику" />
+                <button v-if="classificationFilterSearch" type="button" aria-label="Очистить поиск фильтров" @click="classificationFilterSearch = ''">
+                  <X :size="14" :stroke-width="2" aria-hidden="true" />
+                </button>
+              </label>
+              <button
+                class="classification-sidebar__collapse"
+                type="button"
+                :disabled="!openedClassificationFilter"
+                @click="collapseClassificationFilters"
+              >
+                <ChevronUp :size="14" :stroke-width="1.9" aria-hidden="true" />
+                Свернуть все
+              </button>
+            </div>
+            <div v-if="selectedClassificationFilterCount" class="classification-sidebar__chips" aria-label="Выбранные фильтры">
+              <button
+                v-for="(value, name) in selectedClassificationFilters"
+                :key="name"
+                type="button"
+                :title="`Убрать фильтр «${name}»`"
+                @click="removeClassificationFilter(name)"
+              >
+                <span>{{ name }}: <strong>{{ value }}</strong></span>
+                <X :size="13" :stroke-width="2" aria-hidden="true" />
+              </button>
+            </div>
             <p v-if="classificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
               Для выбранного типа нет доступных характеристик.
             </p>
+            <p v-else-if="visibleClassificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
+              Характеристики не найдены.
+            </p>
             <div
-              v-for="filter in classificationFilterGroups"
+              v-for="filter in visibleClassificationFilterGroups"
               :key="filter"
               class="classification-sidebar__group"
               :class="{ 'is-open': openedClassificationFilter === filter, 'is-selected': selectedClassificationFilters[filter] }"
