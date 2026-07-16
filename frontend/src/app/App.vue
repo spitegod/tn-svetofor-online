@@ -2856,12 +2856,14 @@ onBeforeUnmount(() => {
 
           <aside class="classification-sidebar" aria-label="Фильтры классификации">
             <header class="classification-sidebar__header">
-              <div>
-                <strong>Фильтры</strong>
-                <span>
-                  {{ classificationSystems.length }} из {{ classificationBaseSystems.length }} систем
-                  <b v-if="selectedClassificationFilterCount">· выбрано {{ selectedClassificationFilterCount }}</b>
+              <div class="classification-sidebar__heading">
+                <span class="classification-sidebar__heading-icon" aria-hidden="true">
+                  <ListFilter :size="18" :stroke-width="1.9" />
                 </span>
+                <div>
+                  <strong>Фильтры</strong>
+                  <span>{{ classificationSystems.length }} из {{ classificationBaseSystems.length }} систем</span>
+                </div>
               </div>
               <button
                 type="button"
