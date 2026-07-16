@@ -4418,8 +4418,15 @@ button:disabled {
   font-size: 13px;
 }
 
+.changes-refresh-panel > span {
+  min-width: 270px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .changes-refresh-panel button {
   display: inline-flex;
+  width: 154px;
   min-height: 48px;
   align-items: center;
   justify-content: center;
@@ -4435,12 +4442,18 @@ button:disabled {
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
 }
 
-.changes-refresh-panel button:hover,
+.changes-refresh-panel button:hover:not(:disabled),
 .changes-refresh-panel button:focus-visible {
   border-color: #b9c3d1;
   outline: 0;
   box-shadow: 0 7px 20px rgba(30, 48, 75, 0.08);
   transform: translateY(-1px);
+}
+
+.changes-refresh-panel button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+  transform: none;
 }
 
 .changes-refresh-panel .is-spinning {
@@ -5448,6 +5461,11 @@ button:disabled {
 
   .changes-refresh-panel button {
     width: 100%;
+  }
+
+  .changes-refresh-panel > span {
+    min-width: 0;
+    white-space: normal;
   }
 
   .changes-page .summary-grid {

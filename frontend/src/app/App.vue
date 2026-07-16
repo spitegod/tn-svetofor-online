@@ -242,6 +242,7 @@ const tableSearch = ref('')
 const isClassificationLoading = ref(false)
 const isClassificationFiltering = ref(false)
 const isChangesRefreshing = ref(false)
+const changesLastRefreshedAt = ref('')
 const classificationLoadingMessage = ref('Загрузка таблицы...')
 const classificationError = ref('')
 const classificationConstructionTypes = computed(() => [...constructionTypes, 'Тип не присвоен'].map((name) => ({
@@ -413,6 +414,10 @@ function selectedOrderUpdatedAt() {
   return orders.value.find((order) => order.id === selectedOrderId.value)?.updatedAt ?? ''
 }
 
+function changesPageUpdatedAt() {
+  return changesLastRefreshedAt.value || selectedOrderUpdatedAt()
+}
+
 function addedSystemsHint() {
   const index = orders.value.findIndex((order) => order.id === selectedOrderId.value)
   return index === orders.value.length - 1
@@ -428,6 +433,7 @@ async function refreshChangesPage() {
   try {
     await loadOrders()
     await loadClassificationChanges()
+    changesLastRefreshedAt.value = new Date().toISOString()
   } finally {
     isChangesRefreshing.value = false
   }
@@ -533,6 +539,7 @@ async function loadOrders() {
 
 async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
+  changesLastRefreshedAt.value = ''
   openedSelect.value = null
   classificationCatalogSearch.value = ''
   systemCatalogSearch.value = ''
@@ -1993,7 +2000,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="changes-refresh-panel">
-            <span>Последнее обновление: {{ formatOrderDateTime(selectedOrderUpdatedAt()) }}</span>
+            <span>Последнее обновление: {{ formatOrderDateTime(changesPageUpdatedAt()) }}</span>
             <button type="button" :disabled="isChangesRefreshing" @click="refreshChangesPage">
               <RefreshCw :class="{ 'is-spinning': isChangesRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
               {{ isChangesRefreshing ? 'Обновление…' : 'Обновить' }}
