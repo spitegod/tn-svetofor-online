@@ -99,6 +99,89 @@ func (s *SystemDocumentService) Export(ctx context.Context, filter model.SystemD
 	return buffer.Bytes(), nil
 }
 
+func (s *SystemDocumentService) ExportComparison(payload model.ComparisonExport) ([]byte, error) {
+	if len(payload.Headers) < 2 {
+		return nil, fmt.Errorf("comparison export has no columns")
+	}
+
+	file := excelize.NewFile()
+	defer file.Close()
+	sheet := "Сравнение"
+	if err := file.SetSheetName("Sheet1", sheet); err != nil {
+		return nil, fmt.Errorf("rename comparison export sheet: %w", err)
+	}
+
+	borders := []excelize.Border{
+		{Type: "left", Color: "000000", Style: 1},
+		{Type: "top", Color: "000000", Style: 1},
+		{Type: "right", Color: "000000", Style: 1},
+		{Type: "bottom", Color: "000000", Style: 1},
+	}
+	headerStyle, err := file.NewStyle(&excelize.Style{
+		Border: borders,
+		Fill:   excelize.Fill{Type: "pattern", Color: []string{"D9D9D9"}, Pattern: 1},
+		Font:   &excelize.Font{Bold: true, Color: "1F2937"},
+		Alignment: &excelize.Alignment{
+			Vertical: "center",
+			WrapText: true,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create comparison header style: %w", err)
+	}
+	bodyStyle, err := file.NewStyle(&excelize.Style{
+		Border: borders,
+		Alignment: &excelize.Alignment{
+			Vertical: "center",
+			WrapText: true,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create comparison body style: %w", err)
+	}
+
+	for column, value := range payload.Headers {
+		cell, _ := excelize.CoordinatesToCellName(column+1, 1)
+		_ = file.SetCellValue(sheet, cell, value)
+	}
+	for rowIndex, row := range payload.Rows {
+		for column := range payload.Headers {
+			value := ""
+			if column < len(row) {
+				value = row[column]
+			}
+			cell, _ := excelize.CoordinatesToCellName(column+1, rowIndex+2)
+			_ = file.SetCellValue(sheet, cell, value)
+		}
+	}
+
+	lastColumn, _ := excelize.ColumnNumberToName(len(payload.Headers))
+	if err := file.SetCellStyle(sheet, "A1", lastColumn+"1", headerStyle); err != nil {
+		return nil, fmt.Errorf("style comparison header: %w", err)
+	}
+	if len(payload.Rows) > 0 {
+		lastRow := len(payload.Rows) + 1
+		if err := file.SetCellStyle(sheet, "A2", fmt.Sprintf("%s%d", lastColumn, lastRow), bodyStyle); err != nil {
+			return nil, fmt.Errorf("style comparison rows: %w", err)
+		}
+		for row := 2; row <= lastRow; row++ {
+			_ = file.SetRowHeight(sheet, row, 20)
+		}
+	}
+	_ = file.SetRowHeight(sheet, 1, 26)
+	_ = file.SetColWidth(sheet, "A", "A", 48)
+	if len(payload.Headers) > 1 {
+		_ = file.SetColWidth(sheet, "B", lastColumn, 28)
+	}
+	_ = file.SetPanes(sheet, &excelize.Panes{Freeze: true, YSplit: 1, TopLeftCell: "A2", ActivePane: "bottomLeft"})
+
+	var buffer bytes.Buffer
+	if err := file.Write(&buffer); err != nil {
+		return nil, fmt.Errorf("write comparison export: %w", err)
+	}
+	return buffer.Bytes(), nil
+}
+
 func filterSystemDocumentExportRows(rows []model.SystemDocumentRow, filter model.SystemDocumentFilter) []model.SystemDocumentRow {
 	if filter.ConstructionType == "" && filter.SystemType == "" {
 		return rows
