@@ -2737,7 +2737,16 @@ onBeforeUnmount(() => {
         <div class="classification-layout">
           <div class="classification-main">
             <section class="classification-results-toolbar" aria-label="Настройки отображения">
-              <span>Найдено систем: <strong>{{ classificationSystems.length }}</strong></span>
+              <div class="classification-results-toolbar__count">
+                <span class="classification-results-toolbar__icon" aria-hidden="true">
+                  <Layers3 :size="18" :stroke-width="1.8" />
+                </span>
+                <span>
+                  <small>Найдено систем</small>
+                  <strong>{{ classificationSystems.length }}</strong>
+                </span>
+              </div>
+              <span class="classification-results-toolbar__view-label">Вид</span>
               <div class="classification-view-toggle" aria-label="Вид списка">
                 <button :class="{ 'is-active': classificationView === 'grid' }" type="button" aria-label="Карточки" @click="classificationView = 'grid'">
                   <Grid2X2 :size="18" :stroke-width="1.8" aria-hidden="true" />
@@ -2798,10 +2807,21 @@ onBeforeUnmount(() => {
               >
                   <section class="classification-details">
                     <div class="classification-details__header">
-                      <strong>{{ openedClassificationSystem.systemName }}</strong>
+                      <div class="classification-details__title">
+                        <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.8" /></span>
+                        <div>
+                          <small>Характеристики системы</small>
+                          <strong>{{ openedClassificationSystem.systemName }}</strong>
+                        </div>
+                      </div>
                       <div class="classification-details__actions">
-                        <a v-if="openedClassificationSystem.systemUrl" :href="openedClassificationSystem.systemUrl" target="_blank" rel="noreferrer">Открыть на nav.tn.ru</a>
-                        <button type="button" aria-label="Закрыть характеристики" @click="toggleClassificationSystem(openedClassificationSystem.id)">×</button>
+                        <a v-if="openedClassificationSystem.systemUrl" :href="openedClassificationSystem.systemUrl" target="_blank" rel="noreferrer">
+                          Открыть на nav.tn.ru
+                          <ExternalLink :size="14" :stroke-width="1.9" aria-hidden="true" />
+                        </a>
+                        <button type="button" aria-label="Закрыть характеристики" @click="toggleClassificationSystem(openedClassificationSystem.id)">
+                          <X :size="17" :stroke-width="2" aria-hidden="true" />
+                        </button>
                       </div>
                     </div>
                     <table v-if="openedClassificationSystem.characteristics?.length">
