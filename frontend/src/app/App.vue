@@ -1,5 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import {
+  CalendarDays,
+  ChevronDown,
+  ChevronRight,
+  CircleCheck,
+  FunnelX,
+  Layers3,
+  RefreshCw,
+  Repeat2,
+  TriangleAlert,
+} from '@lucide/vue'
+import xlsxFileIcon from 'bootstrap-icons/icons/filetype-xlsx.svg'
 import logo from '@/shared/assets/logo.png'
 import folderIcon from '@/shared/assets/folder.png'
 import browseIcon from '@/shared/assets/browse.png'
@@ -197,6 +209,7 @@ const selectedBeforeFilter = ref('Все')
 const selectedAfterFilter = ref('Все')
 const tableSearch = ref('')
 const isClassificationLoading = ref(false)
+const isChangesRefreshing = ref(false)
 const classificationLoadingMessage = ref('Загрузка таблицы...')
 const classificationError = ref('')
 const classificationConstructionTypes = computed(() => [...constructionTypes, 'Тип не присвоен'].map((name) => ({
@@ -205,6 +218,11 @@ const classificationConstructionTypes = computed(() => [...constructionTypes, '�
     ? classificationRows.value.length
     : classificationRows.value.filter((row) => row.constructionType === name).length,
 })))
+const hasActiveChangeFilters = computed(() =>
+  selectedConstructionType.value !== 'Все' ||
+  selectedBeforeFilter.value !== 'Все' ||
+  selectedAfterFilter.value !== 'Все',
+)
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
 const systemDocumentPageSize = ref('20')
@@ -335,6 +353,58 @@ function formatOrderDate(value: string) {
     month: '2-digit',
     year: '2-digit',
   }).format(new Date(value))
+}
+
+function formatOrderDateTime(value: string) {
+  if (!value) {
+    return '—'
+  }
+
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
+function selectedOrderUpdatedAt() {
+  return orders.value.find((order) => order.id === selectedOrderId.value)?.updatedAt ?? ''
+}
+
+function addedSystemsHint() {
+  const index = orders.value.findIndex((order) => order.id === selectedOrderId.value)
+  return index === orders.value.length - 1
+    ? 'Относительно пустой базы'
+    : 'Относительно предыдущего распоряжения'
+}
+
+async function refreshChangesPage() {
+  if (isChangesRefreshing.value) {
+    return
+  }
+  isChangesRefreshing.value = true
+  try {
+    await loadOrders()
+    await loadClassificationChanges()
+  } finally {
+    isChangesRefreshing.value = false
+  }
+}
+
+function filterChangesByClass(value: string) {
+  selectedAfterFilter.value = value
+  openedSelect.value = null
+  classificationVisibleLimit.value = 20
+}
+
+function resetChangesFilters() {
+  selectedConstructionType.value = 'Все'
+  selectedBeforeFilter.value = 'Все'
+  selectedAfterFilter.value = 'Все'
+  classificationVisibleLimit.value = 20
+  openedSelect.value = null
 }
 
 async function loadOrders() {
@@ -657,7 +727,10 @@ async function loadClassificationChanges() {
   classificationError.value = ''
 
   try {
-    const query = buildClassificationQuery()
+    const query = new URLSearchParams()
+    if (selectedOrderId.value) {
+      query.set('orderId', String(selectedOrderId.value))
+    }
     const response = await fetch(`${API_BASE_URL}/classification-changes?${query.toString()}`)
     if (!response.ok) {
       throw new Error('Не удалось загрузить таблицу 1')
@@ -731,11 +804,13 @@ async function exportClassificationTable() {
 }
 
 function currentClassificationRows() {
-  if (selectedConstructionType.value === 'Все') {
-    return classificationRows.value
-  }
-
-  return classificationRows.value.filter((row) => row.constructionType === selectedConstructionType.value)
+  const query = activePage.value === 'settings' ? tableSearch.value.trim().toLocaleLowerCase('ru-RU') : ''
+  return classificationRows.value.filter((row) =>
+    (selectedConstructionType.value === 'Все' || row.constructionType === selectedConstructionType.value) &&
+    (selectedBeforeFilter.value === 'Все' || row.classBefore === selectedBeforeFilter.value) &&
+    (selectedAfterFilter.value === 'Все' || row.classAfter === selectedAfterFilter.value) &&
+    (!query || row.systemName.toLocaleLowerCase('ru-RU').includes(query)),
+  )
 }
 
 function visibleClassificationRows() {
@@ -1166,6 +1241,7 @@ function selectSystemType(type: SystemTypeOption) {
 
 function selectConstructionType(type: string) {
   selectedConstructionType.value = type
+  classificationVisibleLimit.value = 20
   systemDocumentPage.value = 1
   selectedSystemTypeSlug.value = ''
   openedClassificationSystemId.value = null
@@ -1667,13 +1743,14 @@ onBeforeUnmount(() => {
 
     <main class="page-main">
       <section v-if="activePage === 'changes'" class="changes-page">
-        <div class="order-line">
+        <div class="changes-topbar">
           <div class="select-field">
-            <span>Распоряжение</span>
-            <div class="custom-select" :class="{ 'is-open': openedSelect === 'order' }">
-              <button class="custom-select__button" type="button" @click.stop="toggleSelect('order')">
+            <span>Распоряжения</span>
+            <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
+              <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
+                <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
                 <span>{{ selectedOrderName() }}</span>
-                <i aria-hidden="true" />
+                <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
               </button>
               <Transition name="select-menu">
                 <div v-if="openedSelect === 'order'" class="custom-select__menu">
@@ -1691,28 +1768,52 @@ onBeforeUnmount(() => {
               </Transition>
             </div>
           </div>
+
+          <div class="changes-refresh-panel">
+            <span>Последнее обновление: {{ formatOrderDateTime(selectedOrderUpdatedAt()) }}</span>
+            <button type="button" :disabled="isChangesRefreshing" @click="refreshChangesPage">
+              <RefreshCw :class="{ 'is-spinning': isChangesRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
+              {{ isChangesRefreshing ? 'Обновление…' : 'Обновить' }}
+            </button>
+          </div>
         </div>
 
         <section class="summary-grid" aria-label="Сводка изменений">
-          <article class="summary-card">
-            <span>Добавлено</span>
-            <strong>{{ classificationStats.addedSystems }} систем</strong>
+          <article class="summary-card summary-card--added">
+            <div class="summary-card__icon" aria-hidden="true">
+              <Layers3 :size="34" :stroke-width="1.8" />
+            </div>
+            <div class="summary-card__content">
+              <span>Добавлено систем</span>
+              <strong>{{ classificationStats.addedSystems }}</strong>
+              <small>{{ addedSystemsHint() }}</small>
+            </div>
           </article>
 
-          <div class="status-stack">
-            <article class="status-card status-card--recommended">
+          <div class="status-stack changes-status-stack">
+            <button class="status-card status-card--recommended" :class="{ 'is-selected': selectedAfterFilter === 'Рекомендованная' }" type="button" @click="filterChangesByClass('Рекомендованная')">
+              <CircleCheck :size="25" :stroke-width="1.8" aria-hidden="true" />
               <strong>{{ classificationStats.recommended }}</strong>
               <span>Рекомендованных</span>
-            </article>
-            <article class="status-card status-card--allowed">
+              <ChevronRight class="status-card__chevron" :size="20" aria-hidden="true" />
+            </button>
+            <button class="status-card status-card--allowed" :class="{ 'is-selected': selectedAfterFilter === 'Разрешенная' }" type="button" @click="filterChangesByClass('Разрешенная')">
+              <TriangleAlert :size="25" :stroke-width="1.8" aria-hidden="true" />
               <strong>{{ classificationStats.allowed }}</strong>
               <span>Разрешенных</span>
-            </article>
+              <ChevronRight class="status-card__chevron" :size="20" aria-hidden="true" />
+            </button>
           </div>
 
-          <article class="summary-card">
-            <span>Изм. классификация</span>
-            <strong>{{ classificationStats.classificationChanges }} систем</strong>
+          <article class="summary-card summary-card--changed">
+            <div class="summary-card__icon" aria-hidden="true">
+              <Repeat2 :size="34" :stroke-width="1.8" />
+            </div>
+            <div class="summary-card__content">
+              <span>Изменения в классификации</span>
+              <strong>{{ classificationStats.classificationChanges }}</strong>
+              <small>{{ classificationStats.classificationChanges ? 'Класс систем изменён' : 'Нет изменений' }}</small>
+            </div>
           </article>
         </section>
 
@@ -1749,7 +1850,7 @@ onBeforeUnmount(() => {
                     class="custom-select__option"
                     :class="{ 'is-selected': option === selectedBeforeFilter }"
                     type="button"
-                    @click="selectedBeforeFilter = option; openedSelect = null; loadClassificationChanges()"
+                    @click="selectedBeforeFilter = option; classificationVisibleLimit = 20; openedSelect = null"
                   >
                     {{ option }}
                   </button>
@@ -1772,7 +1873,7 @@ onBeforeUnmount(() => {
                     class="custom-select__option"
                     :class="{ 'is-selected': option === selectedAfterFilter }"
                     type="button"
-                    @click="selectedAfterFilter = option; openedSelect = null; loadClassificationChanges()"
+                    @click="selectedAfterFilter = option; classificationVisibleLimit = 20; openedSelect = null"
                   >
                     {{ option }}
                   </button>
@@ -1780,7 +1881,22 @@ onBeforeUnmount(() => {
               </Transition>
             </div>
           </div>
-          <button class="export-button" type="button" @click="exportClassificationTable">Экспортировать таблицу</button>
+          <Transition name="changes-reset">
+            <button
+              v-if="hasActiveChangeFilters"
+              class="changes-reset-filters"
+              type="button"
+              title="Сбросить фильтры"
+              aria-label="Сбросить фильтры"
+              @click="resetChangesFilters"
+            >
+              <FunnelX :size="19" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </Transition>
+          <button class="export-button" type="button" @click="exportClassificationTable">
+            Экспорт
+            <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
+          </button>
         </section>
 
         <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
@@ -1788,10 +1904,17 @@ onBeforeUnmount(() => {
 
         <div class="systems-table">
           <table>
+            <colgroup>
+              <col class="changes-table__name-column" />
+              <col />
+              <col />
+              <col class="changes-table__action-column" />
+            </colgroup>
             <thead>
               <tr>
                 <th rowspan="2">Название системы</th>
                 <th colspan="2">Класс</th>
+                <th rowspan="2" aria-label="Открыть систему" />
               </tr>
               <tr>
                 <th>было</th>
@@ -1800,7 +1923,7 @@ onBeforeUnmount(() => {
             </thead>
             <tbody>
               <tr v-if="currentClassificationRows().length === 0">
-                <td class="empty-table-cell" colspan="3">{{ classificationChangesEmptyMessage() }}</td>
+                <td class="empty-table-cell" colspan="4">{{ classificationChangesEmptyMessage() }}</td>
               </tr>
               <tr v-for="row in visibleClassificationRows()" :key="row.id">
                 <td>
@@ -1815,6 +1938,11 @@ onBeforeUnmount(() => {
                 </td>
                 <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
                   {{ row.classAfter }}
+                </td>
+                <td class="changes-row-action">
+                  <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer" :aria-label="`Открыть ${row.systemName}`">
+                    <ChevronRight :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  </a>
                 </td>
               </tr>
             </tbody>
@@ -2586,7 +2714,7 @@ onBeforeUnmount(() => {
                   v-model="tableSearch"
                   type="search"
                   placeholder="Поиск по названию или ЕКН"
-                  @keyup.enter="loadClassificationChanges"
+                  @input="classificationVisibleLimit = 20"
                 />
               </label>
               <button class="import-button" type="button" :disabled="isClassificationLoading" @click="openTableImport">
