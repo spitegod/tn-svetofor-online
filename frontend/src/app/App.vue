@@ -226,7 +226,8 @@ const comparisonDropIndex = ref<number | null>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)
 const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
-const classificationVisibleLimit = ref(20)
+const classificationPageSize = ref('20')
+const classificationPage = ref(1)
 const classificationStats = ref<ClassificationStats>({
   addedSystems: 0,
   recommended: 0,
@@ -465,7 +466,7 @@ async function resetSystemFilters() {
 function filterChangesByClass(value: string) {
   selectedAfterFilter.value = value
   openedSelect.value = null
-  classificationVisibleLimit.value = 20
+  classificationPage.value = 1
   showClassificationFilterFeedback()
 }
 
@@ -473,21 +474,21 @@ function resetChangesFilters() {
   selectedConstructionType.value = 'Все'
   selectedBeforeFilter.value = 'Все'
   selectedAfterFilter.value = 'Все'
-  classificationVisibleLimit.value = 20
+  classificationPage.value = 1
   openedSelect.value = null
   showClassificationFilterFeedback()
 }
 
 function selectBeforeChangeFilter(value: string) {
   selectedBeforeFilter.value = value
-  classificationVisibleLimit.value = 20
+  classificationPage.value = 1
   openedSelect.value = null
   showClassificationFilterFeedback()
 }
 
 function selectAfterChangeFilter(value: string) {
   selectedAfterFilter.value = value
-  classificationVisibleLimit.value = 20
+  classificationPage.value = 1
   openedSelect.value = null
   showClassificationFilterFeedback()
 }
@@ -838,7 +839,7 @@ function buildClassificationQuery() {
 
 function applyClassificationPayload(payload: ClassificationResponse) {
   classificationRows.value = payload.rows
-  classificationVisibleLimit.value = 20
+  classificationPage.value = 1
   classificationStats.value = payload.stats
   beforeOptions.value = payload.beforeOptions.length > 1 ? payload.beforeOptions : beforeOptions.value
   afterOptions.value = payload.afterOptions.length > 1 ? payload.afterOptions : afterOptions.value
@@ -937,15 +938,42 @@ function currentClassificationRows() {
 }
 
 function visibleClassificationRows() {
-  return currentClassificationRows().slice(0, classificationVisibleLimit.value)
+  const rows = currentClassificationRows()
+  if (classificationPageSize.value === 'all') return rows
+  const pageSize = Number(classificationPageSize.value)
+  const start = (classificationPage.value - 1) * pageSize
+  return rows.slice(start, start + pageSize)
 }
 
-function showMoreClassificationRows() {
-  classificationVisibleLimit.value += 20
+function classificationPageCount() {
+  if (classificationPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(currentClassificationRows().length / Number(classificationPageSize.value)))
 }
 
-function nextClassificationRowsCount() {
-  return Math.min(20, currentClassificationRows().length - classificationVisibleLimit.value)
+function classificationRangeStart() {
+  if (currentClassificationRows().length === 0) return 0
+  if (classificationPageSize.value === 'all') return 1
+  return (classificationPage.value - 1) * Number(classificationPageSize.value) + 1
+}
+
+function classificationRangeEnd() {
+  if (classificationPageSize.value === 'all') return currentClassificationRows().length
+  return Math.min(classificationPage.value * Number(classificationPageSize.value), currentClassificationRows().length)
+}
+
+function changeClassificationPageSize() {
+  classificationPage.value = 1
+}
+
+async function changeClassificationPage(nextPage: number) {
+  classificationPage.value = Math.min(Math.max(nextPage, 1), classificationPageCount())
+  await nextTick()
+  const table = document.querySelector<HTMLElement>('.changes-table-card')
+  table?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+  table?.querySelector<HTMLElement>('tbody tr')?.focus({ preventScroll: true })
 }
 
 function classificationChangesEmptyMessage() {
@@ -1368,7 +1396,7 @@ function systemTypeImageSource(type: SystemTypeOption) {
 
 function selectConstructionType(type: string) {
   selectedConstructionType.value = type
-  classificationVisibleLimit.value = 20
+  classificationPage.value = 1
   systemDocumentPage.value = 1
   selectedSystemTypeSlug.value = ''
   openedClassificationSystemId.value = null
@@ -1857,6 +1885,23 @@ function classModifier(value: string) {
   return ''
 }
 
+function afterFilterAccentModifier() {
+  return classModifier(selectedAfterFilter.value)
+}
+
+function statusAccentColor(value: string) {
+  switch (classModifier(value)) {
+    case 'recommended':
+      return '#2f9b5c'
+    case 'allowed':
+      return '#d4a900'
+    case 'forbidden':
+      return '#ed1c24'
+    default:
+      return '#8b97a8'
+  }
+}
+
 function pageTitle() {
   return navItems.find((item) => item.key === activePage.value)?.label ?? ''
 }
@@ -2012,7 +2057,12 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <section class="table-toolbar" aria-label="Управление таблицей">
+        <section
+          class="table-toolbar"
+          :class="afterFilterAccentModifier() && `changes-filter-accent--${afterFilterAccentModifier()}`"
+          :style="{ '--before-accent': statusAccentColor(selectedBeforeFilter), '--after-accent': statusAccentColor(selectedAfterFilter) }"
+          aria-label="Управление таблицей"
+        >
           <div class="select-field">
             <span>Было</span>
             <div class="custom-select" :class="{ 'is-open': openedSelect === 'before', 'is-filtered': selectedBeforeFilter !== 'Все' }">
@@ -2080,7 +2130,23 @@ onBeforeUnmount(() => {
 
         <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
 
-        <div class="systems-table">
+        <div
+          class="systems-table changes-table-card"
+          :class="afterFilterAccentModifier() && `changes-table-card--${afterFilterAccentModifier()}`"
+          :style="{ '--before-accent': statusAccentColor(selectedBeforeFilter), '--after-accent': statusAccentColor(selectedAfterFilter) }"
+        >
+          <header class="changes-table-card__header">
+            <div class="changes-table-card__heading">
+              <span class="changes-table-card__icon" aria-hidden="true">
+                <ArrowDownUp :size="18" :stroke-width="1.8" />
+              </span>
+              <div>
+                <strong>Системы и изменения классов</strong>
+                <span>Сравнение статусов по выбранному распоряжению</span>
+              </div>
+            </div>
+            <span class="changes-table-card__count">{{ currentClassificationRows().length }} систем</span>
+          </header>
           <Transition name="table-filter-loading">
             <div v-if="isClassificationLoading || isClassificationFiltering" class="systems-table__filter-loading" role="status" aria-live="polite">
               <span>
@@ -2111,19 +2177,32 @@ onBeforeUnmount(() => {
               <tr v-if="currentClassificationRows().length === 0">
                 <td class="empty-table-cell" colspan="4">{{ classificationChangesEmptyMessage() }}</td>
               </tr>
-              <tr v-for="row in visibleClassificationRows()" :key="row.id">
-                <td>
-                  <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
-                    {{ row.systemName }}
+              <tr v-for="row in visibleClassificationRows()" :key="row.id" tabindex="-1">
+                <td class="changes-system-cell">
+                  <a v-if="row.systemUrl" class="changes-system-link" :href="row.systemUrl" target="_blank" rel="noreferrer">
+                    <span>{{ row.systemName }}</span>
+                    <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
                   </a>
-                  <span v-else>{{ row.systemName }}</span>
+                  <span v-else class="changes-system-name">{{ row.systemName }}</span>
                   <small v-if="row.constructionType === 'Тип не присвоен'" class="construction-type-status">Тип не присвоен</small>
                 </td>
-                <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
-                  {{ row.classBefore }}
+                <td :class="`changes-status-cell changes-status-cell--${classModifier(row.classBefore) || 'neutral'}`">
+                  <span :class="`changes-status changes-status--${classModifier(row.classBefore) || 'neutral'}`">
+                    <CircleCheck v-if="classModifier(row.classBefore) === 'recommended'" :size="15" aria-hidden="true" />
+                    <TriangleAlert v-else-if="classModifier(row.classBefore) === 'allowed'" :size="15" aria-hidden="true" />
+                    <X v-else-if="classModifier(row.classBefore) === 'forbidden'" :size="15" aria-hidden="true" />
+                    <Plus v-else :size="15" aria-hidden="true" />
+                    {{ row.classBefore }}
+                  </span>
                 </td>
-                <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
-                  {{ row.classAfter }}
+                <td :class="`changes-status-cell changes-status-cell--${classModifier(row.classAfter) || 'neutral'}`">
+                  <span :class="`changes-status changes-status--${classModifier(row.classAfter) || 'neutral'}`">
+                    <CircleCheck v-if="classModifier(row.classAfter) === 'recommended'" :size="15" aria-hidden="true" />
+                    <TriangleAlert v-else-if="classModifier(row.classAfter) === 'allowed'" :size="15" aria-hidden="true" />
+                    <X v-else-if="classModifier(row.classAfter) === 'forbidden'" :size="15" aria-hidden="true" />
+                    <Info v-else :size="15" aria-hidden="true" />
+                    {{ row.classAfter }}
+                  </span>
                 </td>
                 <td class="changes-row-action">
                   <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer" :aria-label="`Открыть ${row.systemName}`">
@@ -2135,15 +2214,27 @@ onBeforeUnmount(() => {
           </table>
         </div>
 
-        <button
-          v-if="currentClassificationRows().length > classificationVisibleLimit"
-          class="more-button"
-          type="button"
-          @click="showMoreClassificationRows"
-        >
-          <span>Показать ещё {{ nextClassificationRowsCount() }}</span>
-          <i aria-hidden="true" />
-        </button>
+        <footer v-if="currentClassificationRows().length > 0" class="table-pagination changes-table-pagination">
+          <span class="table-pagination__range">
+            Показано {{ classificationRangeStart() }}–{{ classificationRangeEnd() }} из {{ currentClassificationRows().length }}
+          </span>
+          <div class="table-pagination__controls">
+            <label>
+              <span>Строк на странице</span>
+              <select v-model="classificationPageSize" @change="changeClassificationPageSize">
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
+            <div v-if="classificationPageSize !== 'all'" class="table-pagination__pages">
+              <button type="button" :disabled="classificationPage === 1" aria-label="Предыдущая страница" @click="changeClassificationPage(classificationPage - 1)">‹</button>
+              <strong>{{ classificationPage }} / {{ classificationPageCount() }}</strong>
+              <button type="button" :disabled="classificationPage >= classificationPageCount()" aria-label="Следующая страница" @click="changeClassificationPage(classificationPage + 1)">›</button>
+            </div>
+          </div>
+        </footer>
       </section>
 
       <section v-else-if="activePage === 'systems'" class="systems-page">
@@ -3059,7 +3150,7 @@ onBeforeUnmount(() => {
                   v-model="tableSearch"
                   type="search"
                   placeholder="Поиск по названию или ЕКН"
-                  @input="classificationVisibleLimit = 20"
+                  @input="classificationPage = 1"
                 />
               </label>
               <button class="import-button" type="button" :disabled="isClassificationLoading" @click="openTableImport">
