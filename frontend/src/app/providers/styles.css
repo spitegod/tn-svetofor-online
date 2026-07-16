@@ -1875,6 +1875,11 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
   box-shadow: 0 4px 14px rgba(31, 41, 55, 0.035);
+  scroll-margin-top: 96px;
+}
+
+.classification-results-toolbar:focus {
+  outline: none;
 }
 
 .classification-results-toolbar__count {

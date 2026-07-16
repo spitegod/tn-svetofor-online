@@ -275,6 +275,8 @@ const classificationCatalogSearch = ref('')
 const classificationCatalogSearchInput = ref('')
 const isClassificationSearchPending = ref(false)
 const classificationView = ref<'grid' | 'list'>('grid')
+const classificationCatalogPageSize = ref('50')
+const classificationCatalogPage = ref(1)
 const isClassificationCatalogLoading = ref(false)
 const classificationCatalogError = ref('')
 const classificationCatalogConstructionTypes = computed(() => constructionTypes.map((name) => ({
@@ -345,11 +347,19 @@ const classificationEmptyMessage = computed(() => {
 
   return 'Системы не найдены по выбранным фильтрам'
 })
+const paginatedClassificationSystems = computed(() => {
+  if (classificationCatalogPageSize.value === 'all') {
+    return classificationSystems.value
+  }
+  const pageSize = Number(classificationCatalogPageSize.value)
+  const start = (classificationCatalogPage.value - 1) * pageSize
+  return classificationSystems.value.slice(start, start + pageSize)
+})
 const classificationSystemRows = computed(() => {
   const rows: SystemCatalogRow[][] = []
   const columns = classificationView.value === 'list' ? 1 : classificationCardColumns.value
-  for (let index = 0; index < classificationSystems.value.length; index += columns) {
-    rows.push(classificationSystems.value.slice(index, index + columns))
+  for (let index = 0; index < paginatedClassificationSystems.value.length; index += columns) {
+    rows.push(paginatedClassificationSystems.value.slice(index, index + columns))
   }
   return rows
 })
@@ -551,6 +561,7 @@ async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
   changesLastRefreshedAt.value = ''
   systemsLastRefreshedAt.value = ''
+  classificationCatalogPage.value = 1
   openedSelect.value = null
   classificationCatalogSearch.value = ''
   classificationCatalogSearchInput.value = ''
@@ -1412,6 +1423,7 @@ function matchesSystemType(system: { characteristics?: SystemCharacteristic[] },
 function selectSystemType(type: SystemTypeOption) {
   selectedSystemTypeSlug.value = type.slug
   systemDocumentPage.value = 1
+  classificationCatalogPage.value = 1
   openedClassificationSystemId.value = null
   clearClassificationFilters()
 }
@@ -1431,6 +1443,7 @@ function selectConstructionType(type: string) {
   selectedConstructionType.value = type
   classificationPage.value = 1
   systemDocumentPage.value = 1
+  classificationCatalogPage.value = 1
   selectedSystemTypeSlug.value = ''
   openedClassificationSystemId.value = null
   clearClassificationFilters()
@@ -1483,12 +1496,14 @@ function selectClassificationFilter(name: string, value: string) {
     delete next[name]
   }
   selectedClassificationFilters.value = next
+  classificationCatalogPage.value = 1
   openedClassificationFilter.value = null
   openedClassificationSystemId.value = null
 }
 
 function clearClassificationFilters() {
   selectedClassificationFilters.value = {}
+  classificationCatalogPage.value = 1
   openedClassificationFilter.value = null
   openedClassificationSystemId.value = null
 }
@@ -1558,8 +1573,43 @@ function scheduleClassificationCatalogSearch() {
   classificationSearchTimer = window.setTimeout(() => {
     classificationSearchTimer = null
     classificationCatalogSearch.value = classificationCatalogSearchInput.value
+    classificationCatalogPage.value = 1
+    openedClassificationSystemId.value = null
     isClassificationSearchPending.value = false
   }, 180)
+}
+
+function classificationCatalogPageCount() {
+  if (classificationCatalogPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(classificationSystems.value.length / Number(classificationCatalogPageSize.value)))
+}
+
+function classificationCatalogRangeStart() {
+  if (classificationSystems.value.length === 0) return 0
+  if (classificationCatalogPageSize.value === 'all') return 1
+  return (classificationCatalogPage.value - 1) * Number(classificationCatalogPageSize.value) + 1
+}
+
+function classificationCatalogRangeEnd() {
+  if (classificationCatalogPageSize.value === 'all') return classificationSystems.value.length
+  return Math.min(classificationCatalogPage.value * Number(classificationCatalogPageSize.value), classificationSystems.value.length)
+}
+
+function changeClassificationCatalogPageSize() {
+  classificationCatalogPage.value = 1
+  openedClassificationSystemId.value = null
+}
+
+async function changeClassificationCatalogPage(nextPage: number) {
+  classificationCatalogPage.value = Math.min(Math.max(nextPage, 1), classificationCatalogPageCount())
+  openedClassificationSystemId.value = null
+  await nextTick()
+  const resultsToolbar = document.querySelector<HTMLElement>('.classification-results-toolbar')
+  resultsToolbar?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+  resultsToolbar?.focus({ preventScroll: true })
 }
 
 async function loadDocumentTable() {
@@ -2736,7 +2786,7 @@ onBeforeUnmount(() => {
 
         <div class="classification-layout">
           <div class="classification-main">
-            <section class="classification-results-toolbar" aria-label="Настройки отображения">
+            <section class="classification-results-toolbar" tabindex="-1" aria-label="Настройки отображения">
               <div class="classification-results-toolbar__count">
                 <span class="classification-results-toolbar__icon" aria-hidden="true">
                   <Layers3 :size="18" :stroke-width="1.8" />
@@ -2852,6 +2902,28 @@ onBeforeUnmount(() => {
               </div>
             </div>
             </section>
+
+            <footer v-if="classificationSystems.length" class="table-pagination classification-cards-pagination">
+              <span class="table-pagination__range">
+                Показано {{ classificationCatalogRangeStart() }}–{{ classificationCatalogRangeEnd() }} из {{ classificationSystems.length }}
+              </span>
+              <div class="table-pagination__controls">
+                <label>
+                  <span>Карточек на странице</span>
+                  <select v-model="classificationCatalogPageSize" @change="changeClassificationCatalogPageSize">
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <div v-if="classificationCatalogPageSize !== 'all'" class="table-pagination__pages">
+                  <button type="button" :disabled="classificationCatalogPage === 1" aria-label="Предыдущая страница" @click="changeClassificationCatalogPage(classificationCatalogPage - 1)">‹</button>
+                  <strong>{{ classificationCatalogPage }} / {{ classificationCatalogPageCount() }}</strong>
+                  <button type="button" :disabled="classificationCatalogPage >= classificationCatalogPageCount()" aria-label="Следующая страница" @click="changeClassificationCatalogPage(classificationCatalogPage + 1)">›</button>
+                </div>
+              </div>
+            </footer>
           </div>
 
           <aside class="classification-sidebar" aria-label="Фильтры классификации">
