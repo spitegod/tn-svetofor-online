@@ -212,6 +212,7 @@ const classificationEditTimers = new Map<number, ReturnType<typeof window.setTim
 const systemCatalogEditTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 const documentCommentTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 let systemDocumentSearchTimer: ReturnType<typeof window.setTimeout> | null = null
+let classificationSearchTimer: ReturnType<typeof window.setTimeout> | null = null
 let classificationFilterFeedbackTimer: ReturnType<typeof window.setTimeout> | null = null
 const selectedSystemTypeSlug = ref('')
 const isSystemTypesOpen = ref(false)
@@ -271,6 +272,8 @@ const documentError = ref('')
 const isDocumentTableLoading = ref(false)
 const classificationCatalogRows = ref<SystemCatalogRow[]>([])
 const classificationCatalogSearch = ref('')
+const classificationCatalogSearchInput = ref('')
+const isClassificationSearchPending = ref(false)
 const classificationView = ref<'grid' | 'list'>('grid')
 const isClassificationCatalogLoading = ref(false)
 const classificationCatalogError = ref('')
@@ -370,6 +373,7 @@ const isSystemDocumentLoading = ref(false)
 const systemFilterRequestCount = ref(0)
 const isSystemFiltering = computed(() => systemFilterRequestCount.value > 0)
 const isSystemsRefreshing = ref(false)
+const systemsLastRefreshedAt = ref('')
 const systemCatalogError = ref('')
 const activeSystemFilterCount = computed(() => [
   systemCatalogSearch.value.trim() !== '',
@@ -418,6 +422,10 @@ function changesPageUpdatedAt() {
   return changesLastRefreshedAt.value || selectedOrderUpdatedAt()
 }
 
+function systemsPageUpdatedAt() {
+  return systemsLastRefreshedAt.value || selectedOrderUpdatedAt()
+}
+
 function addedSystemsHint() {
   const index = orders.value.findIndex((order) => order.id === selectedOrderId.value)
   return index === orders.value.length - 1
@@ -445,8 +453,10 @@ async function refreshSystemsPage() {
   }
   isSystemsRefreshing.value = true
   try {
-    await loadOrders()
-    await Promise.all([loadSystemCatalog(), loadSystemDocuments()])
+    await Promise.all([loadSystemCatalog(true), loadSystemDocuments(true)])
+    if (!systemCatalogError.value) {
+      systemsLastRefreshedAt.value = new Date().toISOString()
+    }
   } finally {
     isSystemsRefreshing.value = false
   }
@@ -540,8 +550,11 @@ async function loadOrders() {
 async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
   changesLastRefreshedAt.value = ''
+  systemsLastRefreshedAt.value = ''
   openedSelect.value = null
   classificationCatalogSearch.value = ''
+  classificationCatalogSearchInput.value = ''
+  isClassificationSearchPending.value = false
   systemCatalogSearch.value = ''
   selectedSystemTypeSlug.value = ''
   clearClassificationFilters()
@@ -1087,8 +1100,10 @@ async function loadClassificationCatalog() {
   }
 }
 
-async function loadSystemCatalog() {
-  isSystemCatalogLoading.value = true
+async function loadSystemCatalog(silent = false) {
+  if (!silent) {
+    isSystemCatalogLoading.value = true
+  }
   systemCatalogError.value = ''
 
   try {
@@ -1103,7 +1118,9 @@ async function loadSystemCatalog() {
   } catch (error) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 2'
   } finally {
-    isSystemCatalogLoading.value = false
+    if (!silent) {
+      isSystemCatalogLoading.value = false
+    }
   }
 }
 
@@ -1533,6 +1550,18 @@ function scheduleSystemDocumentSearch() {
   }, 250)
 }
 
+function scheduleClassificationCatalogSearch() {
+  if (classificationSearchTimer) {
+    window.clearTimeout(classificationSearchTimer)
+  }
+  isClassificationSearchPending.value = true
+  classificationSearchTimer = window.setTimeout(() => {
+    classificationSearchTimer = null
+    classificationCatalogSearch.value = classificationCatalogSearchInput.value
+    isClassificationSearchPending.value = false
+  }, 180)
+}
+
 async function loadDocumentTable() {
   isDocumentTableLoading.value = true
   documentError.value = ''
@@ -1948,6 +1977,9 @@ onBeforeUnmount(() => {
   if (systemDocumentSearchTimer) {
     window.clearTimeout(systemDocumentSearchTimer)
   }
+  if (classificationSearchTimer) {
+    window.clearTimeout(classificationSearchTimer)
+  }
   documentCommentTimers.forEach((timer) => window.clearTimeout(timer))
   classificationEditTimers.forEach((timer) => window.clearTimeout(timer))
   systemCatalogEditTimers.forEach((timer) => window.clearTimeout(timer))
@@ -2281,7 +2313,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="changes-refresh-panel">
-            <span>Последнее обновление: {{ formatOrderDateTime(selectedOrderUpdatedAt()) }}</span>
+            <span>Последнее обновление: {{ formatOrderDateTime(systemsPageUpdatedAt()) }}</span>
             <button type="button" :disabled="isSystemsRefreshing" @click="refreshSystemsPage">
               <RefreshCw :class="{ 'is-spinning': isSystemsRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
               {{ isSystemsRefreshing ? 'Обновление…' : 'Обновить' }}
@@ -2622,11 +2654,17 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <label class="search-field classification-search">
+          <label class="search-field classification-search" :class="{ 'is-pending': isClassificationSearchPending }">
             <span>Поиск</span>
             <span class="systems-search-control">
               <Search :size="18" :stroke-width="1.8" aria-hidden="true" />
-              <input v-model="classificationCatalogSearch" type="search" placeholder="Поиск по названию или коду ЕКН" />
+              <input
+                v-model="classificationCatalogSearchInput"
+                type="search"
+                placeholder="Поиск по названию или коду ЕКН"
+                :aria-busy="isClassificationSearchPending"
+                @input="scheduleClassificationCatalogSearch"
+              />
             </span>
           </label>
 
@@ -2637,7 +2675,7 @@ onBeforeUnmount(() => {
             <span>
               <small>Найдено систем</small>
               <strong>{{ classificationSystems.length }}</strong>
-              <em>по выбранным критериям</em>
+              <em>{{ isClassificationSearchPending ? 'Обновляем результаты…' : 'по выбранным критериям' }}</em>
             </span>
           </div>
         </div>
@@ -3236,7 +3274,7 @@ onBeforeUnmount(() => {
                   v-model="systemCatalogSearch"
                   type="search"
                   placeholder="Поиск по названию или ЕКН"
-                  @keyup.enter="loadSystemCatalog"
+                  @keyup.enter="loadSystemCatalog()"
                 />
               </label>
               <button class="import-button" type="button" :disabled="isSystemCatalogLoading" @click="openSystemCatalogImport">

@@ -1739,6 +1739,30 @@ button:disabled {
   background-image: none;
 }
 
+.classification-search .systems-search-control::after {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #dfe4eb;
+  border-top-color: var(--tn-red);
+  border-radius: 50%;
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.classification-search.is-pending .systems-search-control::after {
+  opacity: 1;
+  animation: changes-refresh-spin 0.7s linear infinite;
+}
+
+.classification-search.is-pending input {
+  padding-right: 42px;
+}
+
 .classification-topline .select-field > span,
 .classification-topline .search-field > span:first-child {
   color: #748096;
