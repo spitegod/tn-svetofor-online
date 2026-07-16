@@ -75,6 +75,9 @@ CREATE INDEX IF NOT EXISTS idx_system_characteristics_name ON system_characteris
 CREATE TABLE IF NOT EXISTS nav_system_types (
 	slug TEXT PRIMARY KEY,
 	name TEXT NOT NULL,
+	image_url TEXT NOT NULL DEFAULT '',
+	image_content_type TEXT NOT NULL DEFAULT '',
+	image_data BYTEA,
 	position INTEGER NOT NULL,
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -132,6 +135,9 @@ SELECT setval(pg_get_serial_sequence('orders', 'id'), GREATEST((SELECT MAX(id) F
 	ALTER TABLE classification_changes ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEFAULT 1;
 	ALTER TABLE classification_changes ADD COLUMN IF NOT EXISTS construction_type TEXT NOT NULL DEFAULT 'Тип не присвоен';
 	ALTER TABLE system_catalog ADD COLUMN IF NOT EXISTS order_id BIGINT NOT NULL DEFAULT 1;
+	ALTER TABLE nav_system_types ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '';
+	ALTER TABLE nav_system_types ADD COLUMN IF NOT EXISTS image_content_type TEXT NOT NULL DEFAULT '';
+	ALTER TABLE nav_system_types ADD COLUMN IF NOT EXISTS image_data BYTEA;
 
 CREATE INDEX IF NOT EXISTS idx_classification_changes_order_id ON classification_changes(order_id);
 CREATE INDEX IF NOT EXISTS idx_system_catalog_order_id ON system_catalog(order_id);

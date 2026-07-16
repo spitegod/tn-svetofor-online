@@ -40,6 +40,7 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("POST /api/system-catalog/import", router.importSystemCatalog)
 	mux.HandleFunc("GET /api/system-catalog/export", router.exportSystemCatalog)
 	mux.HandleFunc("POST /api/system-catalog/parse-nav", router.parseNavSystemCatalog)
+	mux.HandleFunc("GET /api/nav-system-types/{slug}/image", router.navSystemTypeImage)
 	mux.HandleFunc("GET /api/nav-parser/settings", router.navParserSettings)
 	mux.HandleFunc("PATCH /api/nav-parser/settings", router.updateNavParserSettings)
 	mux.HandleFunc("GET /api/system-documents", router.listSystemDocuments)
@@ -242,6 +243,20 @@ func (r *Router) parseNavSystemCatalog(w http.ResponseWriter, request *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (r *Router) navSystemTypeImage(w http.ResponseWriter, request *http.Request) {
+	image, err := r.navParser.SystemTypeImage(request.Context(), request.PathValue("slug"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	w.Header().Set("Content-Type", image.ContentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(image.Data)))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(image.Data)
 }
 
 func (r *Router) navParserSettings(w http.ResponseWriter, request *http.Request) {
