@@ -35,6 +35,12 @@ type NavParseReport struct {
 	NotFound []string `json:"notFound"`
 }
 
+type NavParserSettings struct {
+	UpdateIntervalDays int        `json:"updateIntervalDays"`
+	LastRunAt          *time.Time `json:"lastRunAt"`
+	NextRunAt          *time.Time `json:"nextRunAt"`
+}
+
 type SystemCatalogStats struct {
 	Total       int `json:"total"`
 	Recommended int `json:"recommended"`

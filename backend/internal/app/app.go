@@ -39,6 +39,9 @@ func Run(cfg config.Config) error {
 	systemDocumentRepo := repository.NewSystemDocumentRepository(database)
 	systemDocumentService := service.NewSystemDocumentService(systemDocumentRepo)
 	navParserService := service.NewNavParserService(systemCatalogRepo)
+	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
+	defer stopScheduler()
+	go navParserService.RunScheduler(schedulerCtx)
 	orderRepo := repository.NewOrderRepository(database)
 	orderService := service.NewOrderService(orderRepo)
 

@@ -133,32 +133,36 @@ func (r *SystemCatalogRepository) List(ctx context.Context, filter model.SystemC
 
 	if filter.OrderID > 0 {
 		args = append(args, filter.OrderID)
-		clauses = append(clauses, fmt.Sprintf("order_id = $%d", len(args)))
+		clauses = append(clauses, fmt.Sprintf("s.order_id = $%d", len(args)))
 	}
 
 	if filter.Query != "" {
 		args = append(args, "%"+strings.ToLower(filter.Query)+"%")
-		clauses = append(clauses, fmt.Sprintf("(LOWER(system_name) LIKE $%d OR LOWER(code) LIKE $%d)", len(args), len(args)))
+		clauses = append(clauses, fmt.Sprintf("(LOWER(s.system_name) LIKE $%d OR LOWER(s.code) LIKE $%d)", len(args), len(args)))
 	}
 
 	if filter.SystemClass != "" {
 		args = append(args, filter.SystemClass)
-		clauses = append(clauses, fmt.Sprintf("system_class = $%d", len(args)))
+		clauses = append(clauses, fmt.Sprintf("s.system_class = $%d", len(args)))
 	}
 
 	if filter.Curator != "" {
 		args = append(args, filter.Curator)
-		clauses = append(clauses, fmt.Sprintf("curator = $%d", len(args)))
+		clauses = append(clauses, fmt.Sprintf("s.curator = $%d", len(args)))
 	}
 
 	query := `
-		SELECT id, order_id, position, code, system_name, system_url, system_class, curator, imported_at
-		FROM system_catalog
+		SELECT s.id, s.order_id, s.position, s.code, s.system_name,
+			COALESCE(NULLIF(nav.system_url, ''), s.system_url),
+			s.system_class, s.curator, s.imported_at
+		FROM system_catalog s
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
 	`
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
 	}
-	query += " ORDER BY position, id"
+	query += " ORDER BY s.position, s.id"
 
 	result, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -186,13 +190,17 @@ func (r *SystemCatalogRepository) List(ctx context.Context, filter model.SystemC
 	return rows, nil
 }
 
-func (r *SystemCatalogRepository) ParserRows(ctx context.Context, orderID int64) ([]model.SystemCatalogRow, error) {
+func (r *SystemCatalogRepository) ParserRows(ctx context.Context) ([]model.SystemCatalogRow, error) {
 	result, err := r.db.QueryContext(ctx, `
 		SELECT id, order_id, position, code, system_name, system_url, system_class, curator, imported_at
-		FROM system_catalog
-		WHERE order_id = $1
-		ORDER BY position, id
-	`, orderID)
+		FROM (
+			SELECT DISTINCT ON (LOWER(REGEXP_REPLACE(BTRIM(system_name), '\s+', ' ', 'g')))
+				id, order_id, position, code, system_name, system_url, system_class, curator, imported_at
+			FROM system_catalog
+			ORDER BY LOWER(REGEXP_REPLACE(BTRIM(system_name), '\s+', ' ', 'g')), imported_at DESC, id DESC
+		) unique_systems
+		ORDER BY LOWER(system_name), id
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("list system catalog rows for parser: %w", err)
 	}
@@ -213,25 +221,34 @@ func (r *SystemCatalogRepository) ParserRows(ctx context.Context, orderID int64)
 	return rows, nil
 }
 
-func (r *SystemCatalogRepository) SaveParsed(ctx context.Context, systemID int64, systemURL string, characteristics []model.SystemCharacteristic) error {
+func (r *SystemCatalogRepository) SaveParsed(ctx context.Context, systemName string, systemURL string, characteristics []model.SystemCharacteristic) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin save parsed system: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `UPDATE system_catalog SET system_url = $2 WHERE id = $1`, systemID, systemURL); err != nil {
-		return fmt.Errorf("update parsed system url: %w", err)
+	systemKey := systemMetadataKey(systemName)
+	if systemKey == "" {
+		return fmt.Errorf("parsed system name is empty")
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM system_characteristics WHERE system_catalog_id = $1`, systemID); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO nav_systems (system_key, system_name, system_url, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (system_key) DO UPDATE
+		SET system_name = EXCLUDED.system_name, system_url = EXCLUDED.system_url, updated_at = NOW()
+	`, systemKey, systemName, systemURL); err != nil {
+		return fmt.Errorf("upsert parsed system metadata: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM nav_system_characteristics WHERE system_key = $1`, systemKey); err != nil {
 		return fmt.Errorf("clear parsed characteristics: %w", err)
 	}
 
 	for _, characteristic := range characteristics {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO system_characteristics (system_catalog_id, position, name, value)
+			INSERT INTO nav_system_characteristics (system_key, position, name, value)
 			VALUES ($1, $2, $3, $4)
-		`, systemID, characteristic.Position, characteristic.Name, characteristic.Value); err != nil {
+		`, systemKey, characteristic.Position, characteristic.Name, characteristic.Value); err != nil {
 			return fmt.Errorf("insert parsed characteristic: %w", err)
 		}
 	}
@@ -291,38 +308,77 @@ func (r *SystemCatalogRepository) SystemTypes(ctx context.Context) ([]model.Syst
 	return systemTypes, nil
 }
 
+func (r *SystemCatalogRepository) NavParserSettings(ctx context.Context) (model.NavParserSettings, error) {
+	var settings model.NavParserSettings
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT update_interval_days, last_run_at
+		FROM nav_parser_settings
+		WHERE id = TRUE
+	`).Scan(&settings.UpdateIntervalDays, &settings.LastRunAt); err != nil {
+		return model.NavParserSettings{}, fmt.Errorf("load nav parser settings: %w", err)
+	}
+	return settings, nil
+}
+
+func (r *SystemCatalogRepository) UpdateNavParserInterval(ctx context.Context, days int) (model.NavParserSettings, error) {
+	var settings model.NavParserSettings
+	if err := r.db.QueryRowContext(ctx, `
+		UPDATE nav_parser_settings
+		SET update_interval_days = $1
+		WHERE id = TRUE
+		RETURNING update_interval_days, last_run_at
+	`, days).Scan(&settings.UpdateIntervalDays, &settings.LastRunAt); err != nil {
+		return model.NavParserSettings{}, fmt.Errorf("update nav parser interval: %w", err)
+	}
+	return settings, nil
+}
+
+func (r *SystemCatalogRepository) MarkNavParserRun(ctx context.Context) error {
+	if _, err := r.db.ExecContext(ctx, `
+		UPDATE nav_parser_settings
+		SET last_run_at = NOW()
+		WHERE id = TRUE
+	`); err != nil {
+		return fmt.Errorf("mark nav parser run: %w", err)
+	}
+	return nil
+}
+
 func (r *SystemCatalogRepository) loadCharacteristics(ctx context.Context, rows []model.SystemCatalogRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
 
-	byID := make(map[int64]*model.SystemCatalogRow, len(rows))
-	ids := make([]any, 0, len(rows))
+	byKey := make(map[string][]*model.SystemCatalogRow, len(rows))
+	keys := make([]any, 0, len(rows))
 	placeholders := make([]string, 0, len(rows))
 	for index := range rows {
-		byID[rows[index].ID] = &rows[index]
-		ids = append(ids, rows[index].ID)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", index+1))
+		key := systemMetadataKey(rows[index].SystemName)
+		if _, exists := byKey[key]; !exists {
+			keys = append(keys, key)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(keys)))
+		}
+		byKey[key] = append(byKey[key], &rows[index])
 	}
 
 	result, err := r.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT system_catalog_id, position, name, value
-		FROM system_characteristics
-		WHERE system_catalog_id IN (%s)
-		ORDER BY system_catalog_id, position, id
-	`, strings.Join(placeholders, ",")), ids...)
+		SELECT system_key, position, name, value
+		FROM nav_system_characteristics
+		WHERE system_key IN (%s)
+		ORDER BY system_key, position
+	`, strings.Join(placeholders, ",")), keys...)
 	if err != nil {
 		return fmt.Errorf("load system characteristics: %w", err)
 	}
 	defer result.Close()
 
 	for result.Next() {
-		var systemID int64
+		var systemKey string
 		var characteristic model.SystemCharacteristic
-		if err := result.Scan(&systemID, &characteristic.Position, &characteristic.Name, &characteristic.Value); err != nil {
+		if err := result.Scan(&systemKey, &characteristic.Position, &characteristic.Name, &characteristic.Value); err != nil {
 			return fmt.Errorf("scan system characteristic: %w", err)
 		}
-		if row := byID[systemID]; row != nil {
+		for _, row := range byKey[systemKey] {
 			row.Characteristics = append(row.Characteristics, characteristic)
 		}
 	}
@@ -330,6 +386,10 @@ func (r *SystemCatalogRepository) loadCharacteristics(ctx context.Context, rows 
 		return fmt.Errorf("iterate system characteristics: %w", err)
 	}
 	return nil
+}
+
+func systemMetadataKey(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), " "))
 }
 
 func (r *SystemCatalogRepository) Stats(ctx context.Context, orderID int64) (model.SystemCatalogStats, error) {

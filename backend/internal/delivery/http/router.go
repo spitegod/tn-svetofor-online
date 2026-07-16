@@ -37,6 +37,8 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("POST /api/system-catalog/import", router.importSystemCatalog)
 	mux.HandleFunc("GET /api/system-catalog/export", router.exportSystemCatalog)
 	mux.HandleFunc("POST /api/system-catalog/parse-nav", router.parseNavSystemCatalog)
+	mux.HandleFunc("GET /api/nav-parser/settings", router.navParserSettings)
+	mux.HandleFunc("PATCH /api/nav-parser/settings", router.updateNavParserSettings)
 	mux.HandleFunc("GET /api/system-documents", router.listSystemDocuments)
 	mux.HandleFunc("GET /api/system-documents/export", router.exportSystemDocuments)
 	mux.HandleFunc("GET /api/system-documents/history", router.systemDocumentHistory)
@@ -150,13 +152,38 @@ func (r *Router) updateSystemDocumentComparisonBulk(w http.ResponseWriter, reque
 }
 
 func (r *Router) parseNavSystemCatalog(w http.ResponseWriter, request *http.Request) {
-	report, err := r.navParser.Parse(request.Context(), orderIDFromRequest(request))
+	report, err := r.navParser.Parse(request.Context())
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (r *Router) navParserSettings(w http.ResponseWriter, request *http.Request) {
+	settings, err := r.navParser.Settings(request.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (r *Router) updateNavParserSettings(w http.ResponseWriter, request *http.Request) {
+	var payload struct {
+		UpdateIntervalDays int `json:"updateIntervalDays"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid nav parser settings"))
+		return
+	}
+	settings, err := r.navParser.UpdateInterval(request.Context(), payload.UpdateIntervalDays)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
 }
 
 func health(w http.ResponseWriter, r *http.Request) {

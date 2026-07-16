@@ -182,7 +182,7 @@ func (r *ClassificationRepository) Stats(ctx context.Context, orderID int64) (mo
 			LEFT JOIN previous_systems previous USING (system_key)
 		)
 		SELECT
-			COUNT(*) FILTER (WHERE class_before = 'Новая система') AS added_systems,
+			COUNT(*) FILTER (WHERE is_new) AS added_systems,
 			COUNT(*) FILTER (WHERE class_after = 'Рекомендованная') AS recommended,
 			COUNT(*) FILTER (WHERE class_after = 'Разрешенная') AS allowed,
 			COUNT(*) FILTER (WHERE class_before <> 'Новая система') AS classification_changes

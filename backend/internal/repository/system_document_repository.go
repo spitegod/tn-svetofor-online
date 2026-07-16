@@ -38,10 +38,12 @@ func (r *SystemDocumentRepository) List(ctx context.Context, filter model.System
 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT d.id, d.order_id, o.name, d.system_catalog_id, s.position, s.code,
-			s.system_name, s.system_url, s.system_class, s.curator, d.comparison_selected, d.comment,
+			s.system_name, COALESCE(NULLIF(nav.system_url, ''), s.system_url), s.system_class, s.curator, d.comparison_selected, d.comment,
 			d.created_at, d.updated_at
 		FROM system_documents d
 		JOIN system_catalog s ON s.id = d.system_catalog_id
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
 		JOIN orders o ON o.id = d.order_id
 		WHERE `+strings.Join(clauses, " AND ")+`
 		ORDER BY CASE WHEN BTRIM(d.comment) <> '' THEN 0 ELSE 1 END, LOWER(s.system_name), s.position, d.id
@@ -73,10 +75,12 @@ func (r *SystemDocumentRepository) List(ctx context.Context, filter model.System
 func (r *SystemDocumentRepository) History(ctx context.Context, code string, systemName string) ([]model.SystemDocumentRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT d.id, d.order_id, o.name, d.system_catalog_id, s.position, s.code,
-			s.system_name, s.system_url, s.system_class, s.curator, d.comparison_selected, d.comment,
+			s.system_name, COALESCE(NULLIF(nav.system_url, ''), s.system_url), s.system_class, s.curator, d.comparison_selected, d.comment,
 			d.created_at, d.updated_at
 		FROM system_documents d
 		JOIN system_catalog s ON s.id = d.system_catalog_id
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
 		JOIN orders o ON o.id = d.order_id
 		WHERE s.code = $1 AND s.system_name = $2
 		ORDER BY o.created_at DESC, o.id DESC
@@ -109,31 +113,34 @@ func (r *SystemDocumentRepository) loadCharacteristics(ctx context.Context, rows
 	if len(rows) == 0 {
 		return nil
 	}
-	byCatalogID := make(map[int64]*model.SystemDocumentRow, len(rows))
+	bySystemKey := make(map[string][]*model.SystemDocumentRow, len(rows))
 	args := make([]any, 0, len(rows))
 	placeholders := make([]string, 0, len(rows))
 	for index := range rows {
-		byCatalogID[rows[index].SystemCatalogID] = &rows[index]
-		args = append(args, rows[index].SystemCatalogID)
-		placeholders = append(placeholders, fmt.Sprintf("$%d", index+1))
+		key := systemMetadataKey(rows[index].SystemName)
+		if _, exists := bySystemKey[key]; !exists {
+			args = append(args, key)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+		}
+		bySystemKey[key] = append(bySystemKey[key], &rows[index])
 	}
 	result, err := r.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT system_catalog_id, position, name, value
-		FROM system_characteristics
-		WHERE system_catalog_id IN (%s)
-		ORDER BY system_catalog_id, position, id
+		SELECT system_key, position, name, value
+		FROM nav_system_characteristics
+		WHERE system_key IN (%s)
+		ORDER BY system_key, position
 	`, strings.Join(placeholders, ",")), args...)
 	if err != nil {
 		return fmt.Errorf("load system document characteristics: %w", err)
 	}
 	defer result.Close()
 	for result.Next() {
-		var catalogID int64
+		var systemKey string
 		var characteristic model.SystemCharacteristic
-		if err := result.Scan(&catalogID, &characteristic.Position, &characteristic.Name, &characteristic.Value); err != nil {
+		if err := result.Scan(&systemKey, &characteristic.Position, &characteristic.Name, &characteristic.Value); err != nil {
 			return fmt.Errorf("scan system document characteristic: %w", err)
 		}
-		if row := byCatalogID[catalogID]; row != nil {
+		for _, row := range bySystemKey[systemKey] {
 			row.Characteristics = append(row.Characteristics, characteristic)
 		}
 	}
@@ -153,10 +160,12 @@ func (r *SystemDocumentRepository) UpdateComment(ctx context.Context, id int64, 
 			RETURNING *
 		)
 		SELECT d.id, d.order_id, o.name, d.system_catalog_id, s.position, s.code,
-			s.system_name, s.system_url, s.system_class, s.curator, d.comparison_selected, d.comment,
+			s.system_name, COALESCE(NULLIF(nav.system_url, ''), s.system_url), s.system_class, s.curator, d.comparison_selected, d.comment,
 			d.created_at, d.updated_at
 		FROM updated d
 		JOIN system_catalog s ON s.id = d.system_catalog_id
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
 		JOIN orders o ON o.id = d.order_id
 	`, id, orderID, comment).Scan(&row.ID, &row.OrderID, &row.OrderName, &row.SystemCatalogID, &row.Position, &row.Code,
 		&row.SystemName, &row.SystemURL, &row.SystemClass, &row.Curator, &row.ComparisonSelected, &row.Comment,
