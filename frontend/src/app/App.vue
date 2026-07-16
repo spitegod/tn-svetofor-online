@@ -202,6 +202,8 @@ const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
 const comparisonOnlyDifferences = ref(false)
 const comparisonSort = ref<'differences-first' | 'name-asc' | 'name-desc'>('differences-first')
+const comparisonPageSize = ref('20')
+const comparisonPage = ref(1)
 const isComparisonLoading = ref(false)
 const comparisonError = ref('')
 const isOrdersLoading = ref(false)
@@ -838,6 +840,43 @@ function comparisonRows() {
     })
 }
 
+function visibleComparisonRows() {
+  const rows = comparisonRows()
+  if (comparisonPageSize.value === 'all') return rows
+  const pageSize = Number(comparisonPageSize.value)
+  const start = (comparisonPage.value - 1) * pageSize
+  return rows.slice(start, start + pageSize)
+}
+
+function comparisonPageCount() {
+  if (comparisonPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(comparisonRows().length / Number(comparisonPageSize.value)))
+}
+
+function comparisonRangeStart() {
+  if (comparisonRows().length === 0) return 0
+  if (comparisonPageSize.value === 'all') return 1
+  return (comparisonPage.value - 1) * Number(comparisonPageSize.value) + 1
+}
+
+function comparisonRangeEnd() {
+  if (comparisonPageSize.value === 'all') return comparisonRows().length
+  return Math.min(comparisonPage.value * Number(comparisonPageSize.value), comparisonRows().length)
+}
+
+function changeComparisonPageSize() {
+  comparisonPage.value = 1
+}
+
+async function changeComparisonPage(nextPage: number) {
+  comparisonPage.value = Math.min(Math.max(nextPage, 1), comparisonPageCount())
+  await nextTick()
+  document.querySelector<HTMLElement>('.comparison-table')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+}
+
 function normalizedComparisonName(value: string) {
   return value
     .trim()
@@ -855,17 +894,20 @@ function comparisonSortLabel() {
 
 function selectComparisonSort(value: 'differences-first' | 'name-asc' | 'name-desc') {
   comparisonSort.value = value
+  comparisonPage.value = 1
   openedSelect.value = null
 }
 
 function selectComparisonDifferenceFilter(onlyDifferences: boolean) {
   comparisonOnlyDifferences.value = onlyDifferences
+  comparisonPage.value = 1
   openedSelect.value = null
 }
 
 function hideComparisonRow(row: ComparisonRow) {
   if (!hiddenComparisonRows.value.includes(row.key)) {
     hiddenComparisonRows.value = [...hiddenComparisonRows.value, row.key]
+    comparisonPage.value = Math.min(comparisonPage.value, comparisonPageCount())
   }
 }
 
@@ -3249,7 +3291,7 @@ onBeforeUnmount(() => {
                   В выбранных распоряжениях пока нет данных таблицы 2
                 </td>
               </tr>
-              <tr v-for="row in comparisonRows()" :key="row.key" :class="{ 'has-difference': comparisonRowHasDifference(row) }">
+              <tr v-for="row in visibleComparisonRows()" :key="row.key" :class="{ 'has-difference': comparisonRowHasDifference(row) }">
                 <td class="comparison-system-cell">
                   <span>{{ row.name }}</span>
                   <small v-if="comparisonRowHasDifference(row)">
@@ -3278,6 +3320,28 @@ onBeforeUnmount(() => {
             </tbody>
           </table>
         </div>
+
+        <footer v-if="comparisonRows().length > 0" class="table-pagination comparison-table-pagination">
+          <span class="table-pagination__range">
+            Показано {{ comparisonRangeStart() }}–{{ comparisonRangeEnd() }} из {{ comparisonRows().length }}
+          </span>
+          <div class="table-pagination__controls">
+            <label>
+              <span>Строк на странице</span>
+              <select v-model="comparisonPageSize" @change="changeComparisonPageSize">
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
+            <div v-if="comparisonPageSize !== 'all'" class="table-pagination__pages">
+              <button type="button" :disabled="comparisonPage === 1" aria-label="Предыдущая страница" @click="changeComparisonPage(comparisonPage - 1)">‹</button>
+              <strong>{{ comparisonPage }} / {{ comparisonPageCount() }}</strong>
+              <button type="button" :disabled="comparisonPage >= comparisonPageCount()" aria-label="Следующая страница" @click="changeComparisonPage(comparisonPage + 1)">›</button>
+            </div>
+          </div>
+        </footer>
       </section>
 
       <section v-else-if="activePage === 'settings'" class="settings-page">
