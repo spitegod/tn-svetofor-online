@@ -212,6 +212,7 @@ const classificationEditTimers = new Map<number, ReturnType<typeof window.setTim
 const systemCatalogEditTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 const documentCommentTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 let systemDocumentSearchTimer: ReturnType<typeof window.setTimeout> | null = null
+let classificationSearchTimer: ReturnType<typeof window.setTimeout> | null = null
 let classificationFilterFeedbackTimer: ReturnType<typeof window.setTimeout> | null = null
 const selectedSystemTypeSlug = ref('')
 const isSystemTypesOpen = ref(false)
@@ -271,7 +272,11 @@ const documentError = ref('')
 const isDocumentTableLoading = ref(false)
 const classificationCatalogRows = ref<SystemCatalogRow[]>([])
 const classificationCatalogSearch = ref('')
+const classificationCatalogSearchInput = ref('')
+const isClassificationSearchPending = ref(false)
 const classificationView = ref<'grid' | 'list'>('grid')
+const classificationCatalogPageSize = ref('50')
+const classificationCatalogPage = ref(1)
 const isClassificationCatalogLoading = ref(false)
 const classificationCatalogError = ref('')
 const classificationCatalogConstructionTypes = computed(() => constructionTypes.map((name) => ({
@@ -342,11 +347,19 @@ const classificationEmptyMessage = computed(() => {
 
   return 'Системы не найдены по выбранным фильтрам'
 })
+const paginatedClassificationSystems = computed(() => {
+  if (classificationCatalogPageSize.value === 'all') {
+    return classificationSystems.value
+  }
+  const pageSize = Number(classificationCatalogPageSize.value)
+  const start = (classificationCatalogPage.value - 1) * pageSize
+  return classificationSystems.value.slice(start, start + pageSize)
+})
 const classificationSystemRows = computed(() => {
   const rows: SystemCatalogRow[][] = []
   const columns = classificationView.value === 'list' ? 1 : classificationCardColumns.value
-  for (let index = 0; index < classificationSystems.value.length; index += columns) {
-    rows.push(classificationSystems.value.slice(index, index + columns))
+  for (let index = 0; index < paginatedClassificationSystems.value.length; index += columns) {
+    rows.push(paginatedClassificationSystems.value.slice(index, index + columns))
   }
   return rows
 })
@@ -370,6 +383,7 @@ const isSystemDocumentLoading = ref(false)
 const systemFilterRequestCount = ref(0)
 const isSystemFiltering = computed(() => systemFilterRequestCount.value > 0)
 const isSystemsRefreshing = ref(false)
+const systemsLastRefreshedAt = ref('')
 const systemCatalogError = ref('')
 const activeSystemFilterCount = computed(() => [
   systemCatalogSearch.value.trim() !== '',
@@ -418,6 +432,10 @@ function changesPageUpdatedAt() {
   return changesLastRefreshedAt.value || selectedOrderUpdatedAt()
 }
 
+function systemsPageUpdatedAt() {
+  return systemsLastRefreshedAt.value || selectedOrderUpdatedAt()
+}
+
 function addedSystemsHint() {
   const index = orders.value.findIndex((order) => order.id === selectedOrderId.value)
   return index === orders.value.length - 1
@@ -445,8 +463,10 @@ async function refreshSystemsPage() {
   }
   isSystemsRefreshing.value = true
   try {
-    await loadOrders()
-    await Promise.all([loadSystemCatalog(), loadSystemDocuments()])
+    await Promise.all([loadSystemCatalog(true), loadSystemDocuments(true)])
+    if (!systemCatalogError.value) {
+      systemsLastRefreshedAt.value = new Date().toISOString()
+    }
   } finally {
     isSystemsRefreshing.value = false
   }
@@ -540,8 +560,12 @@ async function loadOrders() {
 async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
   changesLastRefreshedAt.value = ''
+  systemsLastRefreshedAt.value = ''
+  classificationCatalogPage.value = 1
   openedSelect.value = null
   classificationCatalogSearch.value = ''
+  classificationCatalogSearchInput.value = ''
+  isClassificationSearchPending.value = false
   systemCatalogSearch.value = ''
   selectedSystemTypeSlug.value = ''
   clearClassificationFilters()
@@ -1087,8 +1111,10 @@ async function loadClassificationCatalog() {
   }
 }
 
-async function loadSystemCatalog() {
-  isSystemCatalogLoading.value = true
+async function loadSystemCatalog(silent = false) {
+  if (!silent) {
+    isSystemCatalogLoading.value = true
+  }
   systemCatalogError.value = ''
 
   try {
@@ -1103,7 +1129,9 @@ async function loadSystemCatalog() {
   } catch (error) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 2'
   } finally {
-    isSystemCatalogLoading.value = false
+    if (!silent) {
+      isSystemCatalogLoading.value = false
+    }
   }
 }
 
@@ -1395,6 +1423,7 @@ function matchesSystemType(system: { characteristics?: SystemCharacteristic[] },
 function selectSystemType(type: SystemTypeOption) {
   selectedSystemTypeSlug.value = type.slug
   systemDocumentPage.value = 1
+  classificationCatalogPage.value = 1
   openedClassificationSystemId.value = null
   clearClassificationFilters()
 }
@@ -1414,6 +1443,7 @@ function selectConstructionType(type: string) {
   selectedConstructionType.value = type
   classificationPage.value = 1
   systemDocumentPage.value = 1
+  classificationCatalogPage.value = 1
   selectedSystemTypeSlug.value = ''
   openedClassificationSystemId.value = null
   clearClassificationFilters()
@@ -1466,12 +1496,14 @@ function selectClassificationFilter(name: string, value: string) {
     delete next[name]
   }
   selectedClassificationFilters.value = next
+  classificationCatalogPage.value = 1
   openedClassificationFilter.value = null
   openedClassificationSystemId.value = null
 }
 
 function clearClassificationFilters() {
   selectedClassificationFilters.value = {}
+  classificationCatalogPage.value = 1
   openedClassificationFilter.value = null
   openedClassificationSystemId.value = null
 }
@@ -1531,6 +1563,53 @@ function scheduleSystemDocumentSearch() {
     systemDocumentSearchTimer = null
     loadSystemDocuments(true)
   }, 250)
+}
+
+function scheduleClassificationCatalogSearch() {
+  if (classificationSearchTimer) {
+    window.clearTimeout(classificationSearchTimer)
+  }
+  isClassificationSearchPending.value = true
+  classificationSearchTimer = window.setTimeout(() => {
+    classificationSearchTimer = null
+    classificationCatalogSearch.value = classificationCatalogSearchInput.value
+    classificationCatalogPage.value = 1
+    openedClassificationSystemId.value = null
+    isClassificationSearchPending.value = false
+  }, 180)
+}
+
+function classificationCatalogPageCount() {
+  if (classificationCatalogPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(classificationSystems.value.length / Number(classificationCatalogPageSize.value)))
+}
+
+function classificationCatalogRangeStart() {
+  if (classificationSystems.value.length === 0) return 0
+  if (classificationCatalogPageSize.value === 'all') return 1
+  return (classificationCatalogPage.value - 1) * Number(classificationCatalogPageSize.value) + 1
+}
+
+function classificationCatalogRangeEnd() {
+  if (classificationCatalogPageSize.value === 'all') return classificationSystems.value.length
+  return Math.min(classificationCatalogPage.value * Number(classificationCatalogPageSize.value), classificationSystems.value.length)
+}
+
+function changeClassificationCatalogPageSize() {
+  classificationCatalogPage.value = 1
+  openedClassificationSystemId.value = null
+}
+
+async function changeClassificationCatalogPage(nextPage: number) {
+  classificationCatalogPage.value = Math.min(Math.max(nextPage, 1), classificationCatalogPageCount())
+  openedClassificationSystemId.value = null
+  await nextTick()
+  const resultsToolbar = document.querySelector<HTMLElement>('.classification-results-toolbar')
+  resultsToolbar?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+  resultsToolbar?.focus({ preventScroll: true })
 }
 
 async function loadDocumentTable() {
@@ -1948,6 +2027,9 @@ onBeforeUnmount(() => {
   if (systemDocumentSearchTimer) {
     window.clearTimeout(systemDocumentSearchTimer)
   }
+  if (classificationSearchTimer) {
+    window.clearTimeout(classificationSearchTimer)
+  }
   documentCommentTimers.forEach((timer) => window.clearTimeout(timer))
   classificationEditTimers.forEach((timer) => window.clearTimeout(timer))
   systemCatalogEditTimers.forEach((timer) => window.clearTimeout(timer))
@@ -2281,7 +2363,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="changes-refresh-panel">
-            <span>Последнее обновление: {{ formatOrderDateTime(selectedOrderUpdatedAt()) }}</span>
+            <span>Последнее обновление: {{ formatOrderDateTime(systemsPageUpdatedAt()) }}</span>
             <button type="button" :disabled="isSystemsRefreshing" @click="refreshSystemsPage">
               <RefreshCw :class="{ 'is-spinning': isSystemsRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
               {{ isSystemsRefreshing ? 'Обновление…' : 'Обновить' }}
@@ -2622,11 +2704,17 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <label class="search-field classification-search">
+          <label class="search-field classification-search" :class="{ 'is-pending': isClassificationSearchPending }">
             <span>Поиск</span>
             <span class="systems-search-control">
               <Search :size="18" :stroke-width="1.8" aria-hidden="true" />
-              <input v-model="classificationCatalogSearch" type="search" placeholder="Поиск по названию или коду ЕКН" />
+              <input
+                v-model="classificationCatalogSearchInput"
+                type="search"
+                placeholder="Поиск по названию или коду ЕКН"
+                :aria-busy="isClassificationSearchPending"
+                @input="scheduleClassificationCatalogSearch"
+              />
             </span>
           </label>
 
@@ -2637,7 +2725,7 @@ onBeforeUnmount(() => {
             <span>
               <small>Найдено систем</small>
               <strong>{{ classificationSystems.length }}</strong>
-              <em>по выбранным критериям</em>
+              <em>{{ isClassificationSearchPending ? 'Обновляем результаты…' : 'по выбранным критериям' }}</em>
             </span>
           </div>
         </div>
@@ -2698,8 +2786,17 @@ onBeforeUnmount(() => {
 
         <div class="classification-layout">
           <div class="classification-main">
-            <section class="classification-results-toolbar" aria-label="Настройки отображения">
-              <span>Найдено систем: <strong>{{ classificationSystems.length }}</strong></span>
+            <section class="classification-results-toolbar" tabindex="-1" aria-label="Настройки отображения">
+              <div class="classification-results-toolbar__count">
+                <span class="classification-results-toolbar__icon" aria-hidden="true">
+                  <Layers3 :size="18" :stroke-width="1.8" />
+                </span>
+                <span>
+                  <small>Найдено систем</small>
+                  <strong>{{ classificationSystems.length }}</strong>
+                </span>
+              </div>
+              <span class="classification-results-toolbar__view-label">Вид</span>
               <div class="classification-view-toggle" aria-label="Вид списка">
                 <button :class="{ 'is-active': classificationView === 'grid' }" type="button" aria-label="Карточки" @click="classificationView = 'grid'">
                   <Grid2X2 :size="18" :stroke-width="1.8" aria-hidden="true" />
@@ -2760,10 +2857,21 @@ onBeforeUnmount(() => {
               >
                   <section class="classification-details">
                     <div class="classification-details__header">
-                      <strong>{{ openedClassificationSystem.systemName }}</strong>
+                      <div class="classification-details__title">
+                        <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.8" /></span>
+                        <div>
+                          <small>Характеристики системы</small>
+                          <strong>{{ openedClassificationSystem.systemName }}</strong>
+                        </div>
+                      </div>
                       <div class="classification-details__actions">
-                        <a v-if="openedClassificationSystem.systemUrl" :href="openedClassificationSystem.systemUrl" target="_blank" rel="noreferrer">Открыть на nav.tn.ru</a>
-                        <button type="button" aria-label="Закрыть характеристики" @click="toggleClassificationSystem(openedClassificationSystem.id)">×</button>
+                        <a v-if="openedClassificationSystem.systemUrl" :href="openedClassificationSystem.systemUrl" target="_blank" rel="noreferrer">
+                          Открыть на nav.tn.ru
+                          <ExternalLink :size="14" :stroke-width="1.9" aria-hidden="true" />
+                        </a>
+                        <button type="button" aria-label="Закрыть характеристики" @click="toggleClassificationSystem(openedClassificationSystem.id)">
+                          <X :size="17" :stroke-width="2" aria-hidden="true" />
+                        </button>
                       </div>
                     </div>
                     <table v-if="openedClassificationSystem.characteristics?.length">
@@ -2794,16 +2902,40 @@ onBeforeUnmount(() => {
               </div>
             </div>
             </section>
+
+            <footer v-if="classificationSystems.length" class="table-pagination classification-cards-pagination">
+              <span class="table-pagination__range">
+                Показано {{ classificationCatalogRangeStart() }}–{{ classificationCatalogRangeEnd() }} из {{ classificationSystems.length }}
+              </span>
+              <div class="table-pagination__controls">
+                <label>
+                  <span>Карточек на странице</span>
+                  <select v-model="classificationCatalogPageSize" @change="changeClassificationCatalogPageSize">
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <div v-if="classificationCatalogPageSize !== 'all'" class="table-pagination__pages">
+                  <button type="button" :disabled="classificationCatalogPage === 1" aria-label="Предыдущая страница" @click="changeClassificationCatalogPage(classificationCatalogPage - 1)">‹</button>
+                  <strong>{{ classificationCatalogPage }} / {{ classificationCatalogPageCount() }}</strong>
+                  <button type="button" :disabled="classificationCatalogPage >= classificationCatalogPageCount()" aria-label="Следующая страница" @click="changeClassificationCatalogPage(classificationCatalogPage + 1)">›</button>
+                </div>
+              </div>
+            </footer>
           </div>
 
           <aside class="classification-sidebar" aria-label="Фильтры классификации">
             <header class="classification-sidebar__header">
-              <div>
-                <strong>Фильтры</strong>
-                <span>
-                  {{ classificationSystems.length }} из {{ classificationBaseSystems.length }} систем
-                  <b v-if="selectedClassificationFilterCount">· выбрано {{ selectedClassificationFilterCount }}</b>
+              <div class="classification-sidebar__heading">
+                <span class="classification-sidebar__heading-icon" aria-hidden="true">
+                  <ListFilter :size="18" :stroke-width="1.9" />
                 </span>
+                <div>
+                  <strong>Фильтры</strong>
+                  <span>{{ classificationSystems.length }} из {{ classificationBaseSystems.length }} систем</span>
+                </div>
               </div>
               <button
                 type="button"
@@ -3236,7 +3368,7 @@ onBeforeUnmount(() => {
                   v-model="systemCatalogSearch"
                   type="search"
                   placeholder="Поиск по названию или ЕКН"
-                  @keyup.enter="loadSystemCatalog"
+                  @keyup.enter="loadSystemCatalog()"
                 />
               </label>
               <button class="import-button" type="button" :disabled="isSystemCatalogLoading" @click="openSystemCatalogImport">
