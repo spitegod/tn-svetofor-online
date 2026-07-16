@@ -489,10 +489,11 @@ func (r *Router) exportSystemCatalog(w http.ResponseWriter, request *http.Reques
 func classificationFilterFromRequest(request *http.Request) model.ClassificationFilter {
 	query := request.URL.Query()
 	filter := model.ClassificationFilter{
-		OrderID:     orderIDFromRequest(request),
-		Query:       query.Get("q"),
-		ClassBefore: query.Get("before"),
-		ClassAfter:  query.Get("after"),
+		OrderID:          orderIDFromRequest(request),
+		Query:            query.Get("q"),
+		ConstructionType: query.Get("constructionType"),
+		ClassBefore:      query.Get("before"),
+		ClassAfter:       query.Get("after"),
 	}
 
 	if filter.ClassBefore == "Все" {
@@ -500,6 +501,9 @@ func classificationFilterFromRequest(request *http.Request) model.Classification
 	}
 	if filter.ClassAfter == "Все" {
 		filter.ClassAfter = ""
+	}
+	if filter.ConstructionType == "Все" {
+		filter.ConstructionType = ""
 	}
 
 	return filter

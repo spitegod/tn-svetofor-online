@@ -29,8 +29,9 @@ type ClassificationList struct {
 }
 
 type ClassificationFilter struct {
-	OrderID     int64
-	Query       string
-	ClassBefore string
-	ClassAfter  string
+	OrderID          int64
+	Query            string
+	ConstructionType string
+	ClassBefore      string
+	ClassAfter       string
 }

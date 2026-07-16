@@ -919,6 +919,9 @@ async function importTableFile(event: Event) {
 
 async function exportClassificationTable() {
   const query = buildClassificationQuery()
+  if (selectedConstructionType.value && selectedConstructionType.value !== 'Все') {
+    query.set('constructionType', selectedConstructionType.value)
+  }
   const response = await fetch(`${API_BASE_URL}/classification-changes/export?${query.toString()}`)
   if (!response.ok) {
     classificationError.value = 'Не удалось экспортировать таблицу'

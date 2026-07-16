@@ -155,15 +155,58 @@ func (s *ClassificationService) Export(ctx context.Context, filter model.Classif
 	_ = file.MergeCell(sheet, "A1", "A2")
 	_ = file.MergeCell(sheet, "B1", "C1")
 
+	borders := []excelize.Border{
+		{Type: "left", Color: "000000", Style: 1},
+		{Type: "top", Color: "000000", Style: 1},
+		{Type: "right", Color: "000000", Style: 1},
+		{Type: "bottom", Color: "000000", Style: 1},
+	}
+	headerStyle, err := file.NewStyle(&excelize.Style{
+		Border:    borders,
+		Fill:      excelize.Fill{Type: "pattern", Color: []string{"D9D9D9"}, Pattern: 1},
+		Font:      &excelize.Font{Bold: true, Color: "1F2937"},
+		Alignment: &excelize.Alignment{Vertical: "center", WrapText: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create excel header style: %w", err)
+	}
+	bodyStyle, err := file.NewStyle(&excelize.Style{
+		Border:    borders,
+		Alignment: &excelize.Alignment{Vertical: "center"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create excel body style: %w", err)
+	}
+	if err := file.SetCellStyle(sheet, "A1", "C2", headerStyle); err != nil {
+		return nil, fmt.Errorf("style excel header: %w", err)
+	}
+	_ = file.SetRowHeight(sheet, 1, 24)
+	_ = file.SetRowHeight(sheet, 2, 22)
+
 	for index, row := range rows {
 		excelRow := index + 3
 		_ = file.SetCellValue(sheet, fmt.Sprintf("A%d", excelRow), row.SystemName)
 		_ = file.SetCellValue(sheet, fmt.Sprintf("B%d", excelRow), row.ClassBefore)
 		_ = file.SetCellValue(sheet, fmt.Sprintf("C%d", excelRow), row.ClassAfter)
 	}
+	if len(rows) > 0 {
+		lastRow := len(rows) + 2
+		if err := file.SetCellStyle(sheet, "A3", fmt.Sprintf("C%d", lastRow), bodyStyle); err != nil {
+			return nil, fmt.Errorf("style excel rows: %w", err)
+		}
+		for row := 3; row <= lastRow; row++ {
+			_ = file.SetRowHeight(sheet, row, 20)
+		}
+	}
 
-	_ = file.SetColWidth(sheet, "A", "A", 46)
-	_ = file.SetColWidth(sheet, "B", "C", 24)
+	_ = file.SetColWidth(sheet, "A", "A", 48)
+	_ = file.SetColWidth(sheet, "B", "C", 28)
+	_ = file.SetPanes(sheet, &excelize.Panes{
+		Freeze:      true,
+		YSplit:      2,
+		TopLeftCell: "A3",
+		ActivePane:  "bottomLeft",
+	})
 
 	var buffer bytes.Buffer
 	if err := file.Write(&buffer); err != nil {
