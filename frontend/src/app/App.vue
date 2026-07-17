@@ -21,6 +21,7 @@ import {
   Layers3,
   List,
   ListFilter,
+  Lock,
   MoreHorizontal,
   EllipsisVertical,
   Plus,
@@ -30,6 +31,7 @@ import {
   Search,
   TriangleAlert,
   Trash2,
+  Unlock,
   UsersRound,
   X,
 } from '@lucide/vue'
@@ -240,6 +242,7 @@ const classificationPageSize = ref('20')
 const classificationPage = ref(1)
 const settingsClassificationPageSize = ref('10')
 const settingsClassificationPage = ref(1)
+const isSettingsClassificationUnlocked = ref(false)
 const classificationStats = ref<ClassificationStats>({
   addedSystems: 0,
   recommended: 0,
@@ -584,6 +587,7 @@ async function loadOrders() {
 
 async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
+  isSettingsClassificationUnlocked.value = false
   changesLastRefreshedAt.value = ''
   systemsLastRefreshedAt.value = ''
   classificationCatalogPage.value = 1
@@ -3656,7 +3660,21 @@ onBeforeUnmount(() => {
                 <thead>
                   <tr>
                     <th rowspan="2">Название системы</th>
-                    <th colspan="2">Класс</th>
+                    <th colspan="2">
+                      <span class="settings-class-header">
+                        <span>Класс</span>
+                        <button
+                          type="button"
+                          :class="{ 'is-unlocked': isSettingsClassificationUnlocked }"
+                          :aria-label="isSettingsClassificationUnlocked ? 'Заблокировать редактирование' : 'Разрешить редактирование'"
+                          :title="isSettingsClassificationUnlocked ? 'Редактирование разрешено' : 'Редактирование заблокировано'"
+                          @click="isSettingsClassificationUnlocked = !isSettingsClassificationUnlocked"
+                        >
+                          <Unlock v-if="isSettingsClassificationUnlocked" :size="16" :stroke-width="2" aria-hidden="true" />
+                          <Lock v-else :size="16" :stroke-width="2" aria-hidden="true" />
+                        </button>
+                      </span>
+                    </th>
                   </tr>
                   <tr>
                     <th><span class="settings-class-heading settings-class-heading--before">Было</span></th>
@@ -3673,19 +3691,20 @@ onBeforeUnmount(() => {
                         v-model="row.systemName"
                         class="settings-cell-input"
                         type="text"
+                        :disabled="!isSettingsClassificationUnlocked"
                         aria-label="Название системы"
                         @input="scheduleClassificationRowSave(row)"
                         @blur="saveClassificationRow(row)"
                       />
                     </td>
                     <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
-                      <select v-model="row.classBefore" :class="`settings-cell-select settings-cell-select--${classModifier(row.classBefore) || 'new'}`" aria-label="Класс было" @change="saveClassificationRow(row)">
+                      <select v-model="row.classBefore" :disabled="!isSettingsClassificationUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.classBefore) || 'new'}`" aria-label="Класс было" @change="saveClassificationRow(row)">
                         <option value="Новая система">Новая система</option>
                         <option v-for="option in classOptions" :key="`before-${option}`" :value="option">{{ option }}</option>
                       </select>
                     </td>
                     <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
-                      <select v-model="row.classAfter" :class="`settings-cell-select settings-cell-select--${classModifier(row.classAfter) || 'new'}`" aria-label="Класс стало" @change="saveClassificationRow(row)">
+                      <select v-model="row.classAfter" :disabled="!isSettingsClassificationUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.classAfter) || 'new'}`" aria-label="Класс стало" @change="saveClassificationRow(row)">
                         <option v-for="option in classOptions" :key="`after-${option}`" :value="option">{{ option }}</option>
                       </select>
                     </td>

@@ -4441,6 +4441,61 @@ button:disabled {
   background: var(--tn-red);
 }
 
+.settings-class-header {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 30px;
+  line-height: 30px;
+  text-align: center;
+}
+
+.settings-class-header > button {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid #cfd7e2;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #5f6f86;
+  transform: translateY(-50%);
+  transition: border-color 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.settings-class-header > button:hover,
+.settings-class-header > button:focus-visible {
+  border-color: #9eabbc;
+  background: #eef2f6;
+  outline: 0;
+}
+
+.settings-class-header > button.is-unlocked {
+  border-color: #f1b8bb;
+  background: #fff0f1;
+  color: var(--tn-red);
+}
+
+.settings-classification-table input:disabled,
+.settings-classification-table select:disabled {
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.settings-classification-table .settings-cell-input:disabled {
+  border-color: transparent;
+  background: transparent;
+  color: #34425b;
+}
+
+.settings-classification-table tbody tr:hover .settings-cell-input:disabled {
+  border-color: transparent;
+  background: transparent;
+}
+
 .settings-classification-table .settings-cell-input {
   color: #24324a;
   font-weight: 600;
