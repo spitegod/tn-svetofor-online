@@ -21,6 +21,7 @@ import {
   Layers3,
   List,
   ListFilter,
+  Lock,
   MoreHorizontal,
   EllipsisVertical,
   Plus,
@@ -30,6 +31,7 @@ import {
   Search,
   TriangleAlert,
   Trash2,
+  Unlock,
   UsersRound,
   X,
 } from '@lucide/vue'
@@ -91,13 +93,20 @@ type SystemCharacteristic = {
 type NavParseReport = {
   total: number
   found: number
+  fallbackFound: number
   updated: number
   failed: number
+  failedSystems: string[]
   notFound: string[]
 }
 
 type NavParserSettings = {
   updateIntervalDays: number
+  workerCount: number
+  requestTimeoutSeconds: number
+  retryAttempts: number
+  retryDelaySeconds: number
+  fallbackSearch: boolean
   lastRunAt: string | null
   nextRunAt: string | null
 }
@@ -269,6 +278,9 @@ const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
 const classificationPageSize = ref('20')
 const classificationPage = ref(1)
+const settingsClassificationPageSize = ref('10')
+const settingsClassificationPage = ref(1)
+const isSettingsClassificationUnlocked = ref(false)
 const classificationStats = ref<ClassificationStats>({
   addedSystems: 0,
   recommended: 0,
@@ -299,6 +311,9 @@ const activeChangeFilterCount = computed(() => [
 ].filter(Boolean).length)
 const hasActiveChangeFilters = computed(() => activeChangeFilterCount.value > 0)
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
+const settingsSystemCatalogPageSize = ref('10')
+const settingsSystemCatalogPage = ref(1)
+const isSettingsSystemCatalogUnlocked = ref(false)
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
 const systemDocumentPageSize = ref('20')
 const systemDocumentPage = ref(1)
@@ -308,6 +323,8 @@ const systemsConstructionTypes = computed(() => constructionTypes.map((name) => 
 })))
 const documentRows = ref<SystemDocumentRow[]>([])
 const documentSearch = ref('')
+const settingsDocumentsPageSize = ref('10')
+const settingsDocumentsPage = ref(1)
 const documentError = ref('')
 const isDocumentTableLoading = ref(false)
 const classificationCatalogRows = ref<SystemCatalogRow[]>([])
@@ -464,6 +481,14 @@ const navParserLogsNewestFirst = computed(() => [...navParserProgress.value.logs
 const navParserRuns = ref<NavParserRun[]>([])
 const isNavParserLogOpen = ref(false)
 const openedNavParserRunId = ref<number | null>(null)
+const navParseFailedSystems = ref<string[]>([])
+const navParserWorkerCount = ref(4)
+const navParserRequestTimeout = ref(35)
+const navParserRetryAttempts = ref(3)
+const navParserRetryDelay = ref(2)
+const navParserFallbackSearch = ref(true)
+const navParserNextRunAt = ref<string | null>(null)
+const isNavParserSettingsOpen = ref(false)
 const isNavSettingsSaving = ref(false)
 const navSettingsMessage = ref('')
 const navSettingsError = ref('')
@@ -627,9 +652,13 @@ async function loadOrders() {
 
 async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
+  isSettingsClassificationUnlocked.value = false
+  isSettingsSystemCatalogUnlocked.value = false
+  settingsSystemCatalogPage.value = 1
   changesLastRefreshedAt.value = ''
   systemsLastRefreshedAt.value = ''
   classificationCatalogPage.value = 1
+  settingsClassificationPage.value = 1
   openedSelect.value = null
   classificationCatalogSearch.value = ''
   classificationCatalogSearchInput.value = ''
@@ -1150,6 +1179,48 @@ function changeClassificationPageSize() {
   classificationPage.value = 1
 }
 
+function visibleSettingsClassificationRows() {
+  const rows = currentSettingsClassificationRows()
+  if (settingsClassificationPageSize.value === 'all') return rows
+  const pageSize = Number(settingsClassificationPageSize.value)
+  const start = (settingsClassificationPage.value - 1) * pageSize
+  return rows.slice(start, start + pageSize)
+}
+
+function currentSettingsClassificationRows() {
+  const query = tableSearch.value.trim().toLocaleLowerCase('ru-RU')
+  return classificationRows.value.filter((row) => !query || row.systemName.toLocaleLowerCase('ru-RU').includes(query))
+}
+
+function settingsClassificationPageCount() {
+  if (settingsClassificationPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(currentSettingsClassificationRows().length / Number(settingsClassificationPageSize.value)))
+}
+
+function settingsClassificationRangeStart() {
+  if (currentSettingsClassificationRows().length === 0) return 0
+  if (settingsClassificationPageSize.value === 'all') return 1
+  return (settingsClassificationPage.value - 1) * Number(settingsClassificationPageSize.value) + 1
+}
+
+function settingsClassificationRangeEnd() {
+  if (settingsClassificationPageSize.value === 'all') return currentSettingsClassificationRows().length
+  return Math.min(settingsClassificationPage.value * Number(settingsClassificationPageSize.value), currentSettingsClassificationRows().length)
+}
+
+function changeSettingsClassificationPageSize() {
+  settingsClassificationPage.value = 1
+}
+
+async function changeSettingsClassificationPage(nextPage: number) {
+  settingsClassificationPage.value = Math.min(Math.max(nextPage, 1), settingsClassificationPageCount())
+  await nextTick()
+  document.querySelector<HTMLElement>('.settings-classification-block')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+}
+
 async function changeClassificationPage(nextPage: number) {
   classificationPage.value = Math.min(Math.max(nextPage, 1), classificationPageCount())
   await nextTick()
@@ -1318,6 +1389,7 @@ async function importSystemCatalogFile(event: Event) {
     selectedSystemCatalogClass.value = 'Все'
     selectedSystemCatalogCurator.value = 'Все кураторы'
     systemCatalogSearch.value = ''
+    settingsSystemCatalogPage.value = 1
     const payload: SystemCatalogResponse = await response.json()
     applySystemCatalogPayload(payload)
     classificationCatalogRows.value = payload.rows
@@ -1366,6 +1438,7 @@ async function runNavParser() {
   navParseMessage.value = ''
   navParseError.value = ''
   navParseNotFound.value = []
+  navParseFailedSystems.value = []
   isNavParserLogOpen.value = true
   startNavParserPolling()
   try {
@@ -1380,8 +1453,9 @@ async function runNavParser() {
     }
 
     const report: NavParseReport = await response.json()
-    navParseMessage.value = `Обновлено ${report.updated} из ${report.total}. Найдено: ${report.found}, не найдено: ${report.notFound.length}, ошибок: ${report.failed}.`
+    navParseMessage.value = `Обновлено ${report.updated} из ${report.total}. Через резервный поиск: ${report.fallbackFound}, не найдено: ${report.notFound.length}, ошибок: ${report.failed}.`
     navParseNotFound.value = report.notFound
+    navParseFailedSystems.value = report.failedSystems ?? []
     selectedClassificationFilters.value = {}
     await Promise.all([loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings()])
   } catch (error) {
@@ -1499,7 +1573,7 @@ async function loadNavParserSettings() {
       throw new Error('Не удалось загрузить настройки парсера')
     }
     const settings: NavParserSettings = await response.json()
-    navParserIntervalDays.value = settings.updateIntervalDays
+    applyNavParserSettings(settings)
     navSettingsError.value = ''
   } catch (error) {
     navSettingsError.value = error instanceof Error ? error.message : 'Не удалось загрузить настройки парсера'
@@ -1509,6 +1583,10 @@ async function loadNavParserSettings() {
 async function saveNavParserSettings() {
   const days = Math.min(365, Math.max(1, Math.round(Number(navParserIntervalDays.value) || 1)))
   navParserIntervalDays.value = days
+  navParserWorkerCount.value = Math.min(10, Math.max(1, Math.round(Number(navParserWorkerCount.value) || 4)))
+  navParserRequestTimeout.value = Math.min(120, Math.max(5, Math.round(Number(navParserRequestTimeout.value) || 35)))
+  navParserRetryAttempts.value = Math.min(5, Math.max(1, Math.round(Number(navParserRetryAttempts.value) || 3)))
+  navParserRetryDelay.value = Math.min(30, Math.max(1, Math.round(Number(navParserRetryDelay.value) || 2)))
   isNavSettingsSaving.value = true
   navSettingsMessage.value = ''
   navSettingsError.value = ''
@@ -1516,14 +1594,21 @@ async function saveNavParserSettings() {
     const response = await fetch(`${API_BASE_URL}/nav-parser/settings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updateIntervalDays: days }),
+      body: JSON.stringify({
+        updateIntervalDays: days,
+        workerCount: navParserWorkerCount.value,
+        requestTimeoutSeconds: navParserRequestTimeout.value,
+        retryAttempts: navParserRetryAttempts.value,
+        retryDelaySeconds: navParserRetryDelay.value,
+        fallbackSearch: navParserFallbackSearch.value,
+      }),
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
       throw new Error(payload?.error ?? 'Не удалось сохранить частоту обновления')
     }
     const settings: NavParserSettings = await response.json()
-    navParserIntervalDays.value = settings.updateIntervalDays
+    applyNavParserSettings(settings)
     navSettingsMessage.value = 'Частота обновления сохранена'
   } catch (error) {
     navSettingsError.value = error instanceof Error ? error.message : 'Не удалось сохранить частоту обновления'
@@ -1532,8 +1617,63 @@ async function saveNavParserSettings() {
   }
 }
 
-function currentSystemCatalogRows() {
-  return systemCatalogRows.value
+function navParserNextRunLabel() {
+  return navParserNextRunAt.value
+    ? `Следующий запуск: ${formatOrderDateTime(navParserNextRunAt.value)}`
+    : 'Следующий запуск — после первого успешного запуска'
+}
+
+function applyNavParserSettings(settings: NavParserSettings) {
+  navParserIntervalDays.value = settings.updateIntervalDays ?? 1
+  navParserWorkerCount.value = settings.workerCount ?? 4
+  navParserRequestTimeout.value = settings.requestTimeoutSeconds ?? 35
+  navParserRetryAttempts.value = settings.retryAttempts ?? 3
+  navParserRetryDelay.value = settings.retryDelaySeconds ?? 2
+  navParserFallbackSearch.value = settings.fallbackSearch ?? true
+  navParserNextRunAt.value = settings.nextRunAt ?? null
+}
+
+function currentSettingsSystemCatalogRows() {
+  const query = systemCatalogSearch.value.trim().toLocaleLowerCase('ru-RU')
+  return systemCatalogRows.value.filter((row) => !query || [row.code, row.systemName, row.curator]
+    .some((value) => value.toLocaleLowerCase('ru-RU').includes(query)))
+}
+
+function visibleSettingsSystemCatalogRows() {
+  const rows = currentSettingsSystemCatalogRows()
+  if (settingsSystemCatalogPageSize.value === 'all') return rows
+  const pageSize = Number(settingsSystemCatalogPageSize.value)
+  const start = (settingsSystemCatalogPage.value - 1) * pageSize
+  return rows.slice(start, start + pageSize)
+}
+
+function settingsSystemCatalogPageCount() {
+  if (settingsSystemCatalogPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(currentSettingsSystemCatalogRows().length / Number(settingsSystemCatalogPageSize.value)))
+}
+
+function settingsSystemCatalogRangeStart() {
+  if (currentSettingsSystemCatalogRows().length === 0) return 0
+  if (settingsSystemCatalogPageSize.value === 'all') return 1
+  return (settingsSystemCatalogPage.value - 1) * Number(settingsSystemCatalogPageSize.value) + 1
+}
+
+function settingsSystemCatalogRangeEnd() {
+  if (settingsSystemCatalogPageSize.value === 'all') return currentSettingsSystemCatalogRows().length
+  return Math.min(settingsSystemCatalogPage.value * Number(settingsSystemCatalogPageSize.value), currentSettingsSystemCatalogRows().length)
+}
+
+function changeSettingsSystemCatalogPageSize() {
+  settingsSystemCatalogPage.value = 1
+}
+
+async function changeSettingsSystemCatalogPage(nextPage: number) {
+  settingsSystemCatalogPage.value = Math.min(Math.max(nextPage, 1), settingsSystemCatalogPageCount())
+  await nextTick()
+  document.querySelector<HTMLElement>('.settings-system-catalog-block')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
 }
 
 function scheduleSystemCatalogRowSave(row: SystemCatalogRow) {
@@ -1914,6 +2054,42 @@ const filteredDocumentRows = computed(() => {
   )
 })
 
+const visibleDocumentRows = computed(() => {
+  if (settingsDocumentsPageSize.value === 'all') return filteredDocumentRows.value
+  const pageSize = Number(settingsDocumentsPageSize.value)
+  const start = (settingsDocumentsPage.value - 1) * pageSize
+  return filteredDocumentRows.value.slice(start, start + pageSize)
+})
+
+function settingsDocumentsPageCount() {
+  if (settingsDocumentsPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(filteredDocumentRows.value.length / Number(settingsDocumentsPageSize.value)))
+}
+
+function settingsDocumentsRangeStart() {
+  if (filteredDocumentRows.value.length === 0) return 0
+  if (settingsDocumentsPageSize.value === 'all') return 1
+  return (settingsDocumentsPage.value - 1) * Number(settingsDocumentsPageSize.value) + 1
+}
+
+function settingsDocumentsRangeEnd() {
+  if (settingsDocumentsPageSize.value === 'all') return filteredDocumentRows.value.length
+  return Math.min(settingsDocumentsPage.value * Number(settingsDocumentsPageSize.value), filteredDocumentRows.value.length)
+}
+
+function changeSettingsDocumentsPageSize() {
+  settingsDocumentsPage.value = 1
+}
+
+async function changeSettingsDocumentsPage(nextPage: number) {
+  settingsDocumentsPage.value = Math.min(Math.max(nextPage, 1), settingsDocumentsPageCount())
+  await nextTick()
+  document.querySelector<HTMLElement>('.settings-documents-block')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+}
+
 function scheduleDocumentCommentSave(row: SystemDocumentRow) {
   const currentTimer = documentCommentTimers.get(row.id)
   if (currentTimer) {
@@ -1967,6 +2143,12 @@ async function uploadSystemDocumentAttachment(row: SystemDocumentRow, event: Eve
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file || attachmentPendingIds.value.includes(row.id)) {
+    return
+  }
+  const extension = file.name.split('.').pop()?.toLocaleLowerCase('ru-RU') ?? ''
+  if (!['pdf', 'doc', 'docx'].includes(extension)) {
+    documentError.value = 'Можно прикрепить только документы PDF, DOC или DOCX'
+    input.value = ''
     return
   }
   if (file.size > 25 * 1024 * 1024) {
@@ -3527,22 +3709,14 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="parser-settings__controls">
-              <label class="parser-frequency-field">
-                <span>Частота обновления</span>
-                <span class="parser-frequency-field__input">
-                  <input
-                    v-model.number="navParserIntervalDays"
-                    type="number"
-                    min="1"
-                    max="365"
-                    step="1"
-                    :disabled="isNavSettingsSaving"
-                    aria-label="Частота обновления парсера в днях"
-                    @change="saveNavParserSettings"
-                  />
-                  <span>дней</span>
-                </span>
-              </label>
+              <span class="parser-settings__schedule">
+                <span>Автозапуск каждые <strong>{{ navParserIntervalDays }}</strong> дн.</span>
+                <small>{{ navParserNextRunLabel() }}</small>
+              </span>
+              <button class="parser-settings__toggle" type="button" :aria-expanded="isNavParserSettingsOpen" @click="isNavParserSettingsOpen = !isNavParserSettingsOpen">
+                Настройки
+                <ChevronDown :class="{ 'is-open': isNavParserSettingsOpen }" :size="17" :stroke-width="1.8" aria-hidden="true" />
+              </button>
               <button class="import-button parser-settings__button" type="button" :disabled="isNavParsing" @click="runNavParser">
                 {{ isNavParsing ? 'Парсинг выполняется…' : 'Запустить парсер' }}
               </button>
@@ -3650,6 +3824,53 @@ onBeforeUnmount(() => {
               </article>
             </div>
           </section>
+          <Transition name="parser-options">
+            <div v-if="isNavParserSettingsOpen" class="parser-options">
+              <div class="parser-options__heading">
+                <div>
+                  <strong>Расширенные настройки</strong>
+                  <span>Параметры применяются при следующем ручном или автоматическом запуске.</span>
+                </div>
+                <button class="parser-options__save" type="button" :disabled="isNavSettingsSaving" @click="saveNavParserSettings">
+                  {{ isNavSettingsSaving ? 'Сохранение…' : 'Сохранить настройки' }}
+                </button>
+              </div>
+              <div class="parser-options__grid">
+                <label>
+                  <span>Период обновления</span>
+                  <small>Через сколько дней парсер сам запустится снова. Для ежедневного обновления оставьте 1.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserIntervalDays" type="number" min="1" max="365" /><em>дней</em></span>
+                </label>
+                <label>
+                  <span>Параллельные запросы</span>
+                  <small>Сколько страниц nav.tn.ru загружать одновременно. Рекомендуемое значение — 4.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserWorkerCount" type="number" min="1" max="10" /><em>шт.</em></span>
+                </label>
+                <label>
+                  <span>Тайм-аут запроса</span>
+                  <small>Сколько ждать ответа сайта, прежде чем считать запрос неудачным. Рекомендуется 35 секунд.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserRequestTimeout" type="number" min="5" max="120" /><em>сек.</em></span>
+                </label>
+                <label>
+                  <span>Количество попыток</span>
+                  <small>Сколько раз повторить запрос, если сайт временно не ответил. Безопасное значение — 3.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserRetryAttempts" type="number" min="1" max="5" /><em>раз</em></span>
+                </label>
+                <label>
+                  <span>Задержка между попытками</span>
+                  <small>Пауза перед повторным запросом. После каждой следующей ошибки она автоматически увеличивается.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserRetryDelay" type="number" min="1" max="30" /><em>сек.</em></span>
+                </label>
+                <label class="parser-options__switch">
+                  <span>
+                    <strong>Резервный поиск</strong>
+                    <small>Если система не найдена в общем каталоге, искать её отдельно через поиск nav.tn.ru. Лучше оставить включённым.</small>
+                  </span>
+                  <input v-model="navParserFallbackSearch" type="checkbox" />
+                </label>
+              </div>
+            </div>
+          </Transition>
           <p v-if="navSettingsError" class="table-message table-message--error">{{ navSettingsError }}</p>
           <p v-else-if="navSettingsMessage" class="table-message table-message--success">{{ navSettingsMessage }}</p>
           <p v-if="navParseError" class="table-message table-message--error">{{ navParseError }}</p>
@@ -3660,13 +3881,28 @@ onBeforeUnmount(() => {
               <li v-for="systemName in navParseNotFound" :key="systemName">{{ systemName }}</li>
             </ul>
           </details>
+          <details v-if="navParseFailedSystems.length" class="parser-settings__not-found parser-settings__failed">
+            <summary>Ошибки загрузки систем ({{ navParseFailedSystems.length }})</summary>
+            <ul>
+              <li v-for="systemName in navParseFailedSystems" :key="systemName">{{ systemName }}</li>
+            </ul>
+          </details>
         </section>
 
         <section class="settings-section orders-settings" aria-labelledby="orders-db-title">
-          <div class="settings-section__header">
-            <div>
-              <span class="settings-section__eyebrow">Распоряжения</span>
-              <h2 id="orders-db-title">Управление базами данных</h2>
+          <div class="settings-section__header settings-orders-header">
+            <div class="settings-orders-heading">
+              <span class="settings-orders-heading__icon" aria-hidden="true">
+                <Database :size="22" :stroke-width="1.8" />
+              </span>
+              <div>
+                <span class="settings-section__eyebrow">Распоряжения</span>
+                <span class="settings-orders-heading__title">
+                  <h2 id="orders-db-title">Управление базами данных</h2>
+                  <em>Баз: {{ orders.length }}</em>
+                </span>
+                <p>Каждое распоряжение хранит отдельный набор систем, классов и комментариев.</p>
+              </div>
             </div>
             <button class="settings-create-order" type="button" @click="createOrder">
               <Plus :size="18" :stroke-width="1.8" aria-hidden="true" />
@@ -3688,7 +3924,7 @@ onBeforeUnmount(() => {
                 <tr v-for="order in orders" :key="order.id">
                   <td>
                     <span class="settings-order-name">
-                      <Database :size="17" :stroke-width="1.8" aria-hidden="true" />
+                      <i aria-hidden="true"><Database :size="17" :stroke-width="1.8" /></i>
                       <input
                         v-model="order.name"
                         class="order-name-input"
@@ -3700,8 +3936,8 @@ onBeforeUnmount(() => {
                       />
                     </span>
                   </td>
-                  <td>{{ formatOrderDateTime(order.createdAt) }}</td>
-                  <td>{{ formatOrderDateTime(order.updatedAt) }}</td>
+                  <td class="settings-order-date"><span>Создана</span><strong>{{ formatOrderDateTime(order.createdAt) }}</strong></td>
+                  <td class="settings-order-date settings-order-date--updated"><span>Обновлена</span><strong>{{ formatOrderDateTime(order.updatedAt) }}</strong></td>
                   <td class="settings-order-actions">
                     <button class="settings-order-menu-button" type="button" aria-label="Действия с распоряжением" @click.stop="settingsOrderMenuId = settingsOrderMenuId === order.id ? null : order.id">
                       <EllipsisVertical :size="19" :stroke-width="1.9" aria-hidden="true" />
@@ -3753,7 +3989,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <section class="settings-table-block" aria-label="Таблица 1">
+          <section class="settings-table-block settings-classification-block" aria-label="Таблица 1">
             <div class="settings-table-toolbar">
               <span>Таблица 1</span>
               <label class="settings-search">
@@ -3761,7 +3997,7 @@ onBeforeUnmount(() => {
                   v-model="tableSearch"
                   type="search"
                   placeholder="Поиск по названию или ЕКН"
-                  @input="classificationPage = 1"
+                  @input="settingsClassificationPage = 1"
                 />
               </label>
               <button class="import-button" type="button" :disabled="isClassificationLoading" @click="openTableImport">
@@ -3779,41 +4015,56 @@ onBeforeUnmount(() => {
 
             <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
 
-            <div class="systems-table settings-data-table settings-table-scroll">
+            <div class="systems-table settings-data-table settings-paginated-table settings-classification-table">
               <table>
                 <thead>
                   <tr>
                     <th rowspan="2">Название системы</th>
-                    <th colspan="2">Класс</th>
+                    <th colspan="2">
+                      <span class="settings-class-header">
+                        <span>Класс</span>
+                        <button
+                          type="button"
+                          :class="{ 'is-unlocked': isSettingsClassificationUnlocked }"
+                          :aria-label="isSettingsClassificationUnlocked ? 'Заблокировать редактирование' : 'Разрешить редактирование'"
+                          :title="isSettingsClassificationUnlocked ? 'Редактирование разрешено' : 'Редактирование заблокировано'"
+                          @click="isSettingsClassificationUnlocked = !isSettingsClassificationUnlocked"
+                        >
+                          <Unlock v-if="isSettingsClassificationUnlocked" :size="16" :stroke-width="2" aria-hidden="true" />
+                          <Lock v-else :size="16" :stroke-width="2" aria-hidden="true" />
+                        </button>
+                      </span>
+                    </th>
                   </tr>
                   <tr>
-                    <th>было</th>
-                    <th>стало</th>
+                    <th><span class="settings-class-heading settings-class-heading--before">Было</span></th>
+                    <th><span class="settings-class-heading settings-class-heading--after">Стало</span></th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="currentClassificationRows().length === 0">
+                  <tr v-if="currentSettingsClassificationRows().length === 0">
                     <td class="empty-table-cell" colspan="3">В этом распоряжении пока нет данных таблицы 1</td>
                   </tr>
-                  <tr v-for="row in currentClassificationRows()" :key="`settings-${row.id}`">
+                  <tr v-for="row in visibleSettingsClassificationRows()" :key="`settings-${row.id}`">
                     <td>
                       <input
                         v-model="row.systemName"
                         class="settings-cell-input"
                         type="text"
+                        :disabled="!isSettingsClassificationUnlocked"
                         aria-label="Название системы"
                         @input="scheduleClassificationRowSave(row)"
                         @blur="saveClassificationRow(row)"
                       />
                     </td>
                     <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
-                      <select v-model="row.classBefore" class="settings-cell-select" aria-label="Класс было" @change="saveClassificationRow(row)">
+                      <select v-model="row.classBefore" :disabled="!isSettingsClassificationUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.classBefore) || 'new'}`" aria-label="Класс было" @change="saveClassificationRow(row)">
                         <option value="Новая система">Новая система</option>
                         <option v-for="option in classOptions" :key="`before-${option}`" :value="option">{{ option }}</option>
                       </select>
                     </td>
                     <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
-                      <select v-model="row.classAfter" class="settings-cell-select" aria-label="Класс стало" @change="saveClassificationRow(row)">
+                      <select v-model="row.classAfter" :disabled="!isSettingsClassificationUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.classAfter) || 'new'}`" aria-label="Класс стало" @change="saveClassificationRow(row)">
                         <option v-for="option in classOptions" :key="`after-${option}`" :value="option">{{ option }}</option>
                       </select>
                     </td>
@@ -3821,9 +4072,31 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
+            <footer v-if="currentSettingsClassificationRows().length > 0" class="table-pagination settings-table-pagination">
+              <span class="table-pagination__range">
+                Показано {{ settingsClassificationRangeStart() }}–{{ settingsClassificationRangeEnd() }} из {{ currentSettingsClassificationRows().length }}
+              </span>
+              <div class="table-pagination__controls">
+                <label>
+                  <span>Записей на странице</span>
+                  <select v-model="settingsClassificationPageSize" @change="changeSettingsClassificationPageSize">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <div v-if="settingsClassificationPageSize !== 'all'" class="table-pagination__pages">
+                  <button type="button" :disabled="settingsClassificationPage === 1" aria-label="Предыдущая страница" @click="changeSettingsClassificationPage(settingsClassificationPage - 1)">‹</button>
+                  <strong>{{ settingsClassificationPage }} / {{ settingsClassificationPageCount() }}</strong>
+                  <button type="button" :disabled="settingsClassificationPage >= settingsClassificationPageCount()" aria-label="Следующая страница" @click="changeSettingsClassificationPage(settingsClassificationPage + 1)">›</button>
+                </div>
+              </div>
+            </footer>
           </section>
 
-          <section class="settings-table-block" aria-label="Таблица 2">
+          <section class="settings-table-block settings-system-catalog-block" aria-label="Таблица 2">
             <div class="settings-table-toolbar">
               <span>Таблица 2</span>
               <label class="settings-search">
@@ -3831,7 +4104,7 @@ onBeforeUnmount(() => {
                   v-model="systemCatalogSearch"
                   type="search"
                   placeholder="Поиск по названию или ЕКН"
-                  @keyup.enter="loadSystemCatalog()"
+                  @input="settingsSystemCatalogPage = 1"
                 />
               </label>
               <button class="import-button" type="button" :disabled="isSystemCatalogLoading" @click="openSystemCatalogImport">
@@ -3849,26 +4122,41 @@ onBeforeUnmount(() => {
 
             <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
 
-            <div class="systems-table settings-data-table settings-table-scroll">
+            <div class="systems-table settings-data-table settings-paginated-table settings-classification-table settings-system-catalog-table">
               <table>
                 <thead>
                   <tr>
                     <th>Шифр</th>
                     <th>Название системы</th>
                     <th>Класс</th>
-                    <th>Куратор</th>
+                    <th>
+                      <span class="settings-class-header settings-curator-header">
+                        <span>Куратор</span>
+                        <button
+                          type="button"
+                          :class="{ 'is-unlocked': isSettingsSystemCatalogUnlocked }"
+                          :aria-label="isSettingsSystemCatalogUnlocked ? 'Заблокировать редактирование' : 'Разрешить редактирование'"
+                          :title="isSettingsSystemCatalogUnlocked ? 'Редактирование разрешено' : 'Редактирование заблокировано'"
+                          @click="isSettingsSystemCatalogUnlocked = !isSettingsSystemCatalogUnlocked"
+                        >
+                          <Unlock v-if="isSettingsSystemCatalogUnlocked" :size="16" :stroke-width="2" aria-hidden="true" />
+                          <Lock v-else :size="16" :stroke-width="2" aria-hidden="true" />
+                        </button>
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="currentSystemCatalogRows().length === 0">
+                  <tr v-if="currentSettingsSystemCatalogRows().length === 0">
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 2</td>
                   </tr>
-                  <tr v-for="row in currentSystemCatalogRows()" :key="`settings-system-${row.id}`">
+                  <tr v-for="row in visibleSettingsSystemCatalogRows()" :key="`settings-system-${row.id}`">
                     <td>
                       <input
                         v-model="row.code"
                         class="settings-cell-input"
                         type="text"
+                        :disabled="!isSettingsSystemCatalogUnlocked"
                         aria-label="Шифр системы"
                         @input="scheduleSystemCatalogRowSave(row)"
                         @blur="saveSystemCatalogRow(row)"
@@ -3879,13 +4167,14 @@ onBeforeUnmount(() => {
                         v-model="row.systemName"
                         class="settings-cell-input"
                         type="text"
+                        :disabled="!isSettingsSystemCatalogUnlocked"
                         aria-label="Название системы"
                         @input="scheduleSystemCatalogRowSave(row)"
                         @blur="saveSystemCatalogRow(row)"
                       />
                     </td>
                     <td :class="`status-cell status-cell--${classModifier(row.systemClass)}`">
-                      <select v-model="row.systemClass" class="settings-cell-select" aria-label="Класс системы" @change="saveSystemCatalogRow(row)">
+                      <select v-model="row.systemClass" :disabled="!isSettingsSystemCatalogUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.systemClass) || 'new'}`" aria-label="Класс системы" @change="saveSystemCatalogRow(row)">
                         <option v-for="option in classOptions" :key="`catalog-${option}`" :value="option">{{ option }}</option>
                       </select>
                     </td>
@@ -3894,6 +4183,7 @@ onBeforeUnmount(() => {
                         v-model="row.curator"
                         class="settings-cell-input"
                         type="text"
+                        :disabled="!isSettingsSystemCatalogUnlocked"
                         aria-label="Куратор"
                         @input="scheduleSystemCatalogRowSave(row)"
                         @blur="saveSystemCatalogRow(row)"
@@ -3903,28 +4193,50 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
+            <footer v-if="currentSettingsSystemCatalogRows().length > 0" class="table-pagination settings-table-pagination">
+              <span class="table-pagination__range">
+                Показано {{ settingsSystemCatalogRangeStart() }}–{{ settingsSystemCatalogRangeEnd() }} из {{ currentSettingsSystemCatalogRows().length }}
+              </span>
+              <div class="table-pagination__controls">
+                <label>
+                  <span>Записей на странице</span>
+                  <select v-model="settingsSystemCatalogPageSize" @change="changeSettingsSystemCatalogPageSize">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <div v-if="settingsSystemCatalogPageSize !== 'all'" class="table-pagination__pages">
+                  <button type="button" :disabled="settingsSystemCatalogPage === 1" aria-label="Предыдущая страница" @click="changeSettingsSystemCatalogPage(settingsSystemCatalogPage - 1)">‹</button>
+                  <strong>{{ settingsSystemCatalogPage }} / {{ settingsSystemCatalogPageCount() }}</strong>
+                  <button type="button" :disabled="settingsSystemCatalogPage >= settingsSystemCatalogPageCount()" aria-label="Следующая страница" @click="changeSettingsSystemCatalogPage(settingsSystemCatalogPage + 1)">›</button>
+                </div>
+              </div>
+            </footer>
           </section>
 
-          <section class="settings-table-block settings-table-block--documents" aria-label="Таблица 3">
+          <section class="settings-table-block settings-table-block--documents settings-documents-block" aria-label="Таблица 3">
             <div class="settings-table-toolbar">
               <span class="settings-table-title">
                 <strong>Таблица 3</strong>
                 <small>Комментарии и документы по системам</small>
               </span>
               <label class="settings-search">
-                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или ЕКН" />
+                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или ЕКН" @input="settingsDocumentsPage = 1" />
               </label>
             </div>
 
             <p class="settings-table-note">
               <Info :size="17" :stroke-width="1.8" aria-hidden="true" />
-              Здесь можно добавлять комментарии и прикреплять документы к системам.
+              Комментарии сохраняются автоматически. К каждой системе можно прикрепить один файл PDF, DOC или DOCX размером до 25 МБ.
             </p>
 
             <p v-if="documentError" class="table-message table-message--error">{{ documentError }}</p>
             <p v-else-if="isDocumentTableLoading" class="table-message">Загрузка таблицы 3...</p>
 
-            <div class="systems-table settings-docs-table settings-table-scroll">
+            <div class="systems-table settings-docs-table settings-paginated-table">
               <table>
                 <thead>
                   <tr>
@@ -3938,7 +4250,7 @@ onBeforeUnmount(() => {
                   <tr v-if="filteredDocumentRows.length === 0">
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 3</td>
                   </tr>
-                  <tr v-for="row in filteredDocumentRows" :key="`document-${row.id}`">
+                  <tr v-for="row in visibleDocumentRows" :key="`document-${row.id}`">
                     <td>
                       <strong>{{ row.systemName }}</strong>
                       <small class="settings-docs-table__code">{{ row.code }}</small>
@@ -3981,17 +4293,19 @@ onBeforeUnmount(() => {
                           :id="`document-attachment-${row.id}`"
                           class="visually-hidden-input"
                           type="file"
+                          accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                           @change="uploadSystemDocumentAttachment(row, $event)"
                         />
                         <button
-                          class="icon-action-button"
+                          class="document-upload-button"
                           type="button"
                           :disabled="attachmentPendingIds.includes(row.id)"
                           :aria-label="row.attachmentName ? 'Изменить документ' : 'Загрузить документ'"
                           @click="openAttachmentPicker(row)"
                         >
-                          <RefreshCw v-if="row.attachmentName" :size="17" :stroke-width="1.8" aria-hidden="true" />
-                          <CloudUpload v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
+                          <RefreshCw v-if="row.attachmentName" :size="16" :stroke-width="1.8" aria-hidden="true" />
+                          <CloudUpload v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+                          {{ row.attachmentName ? 'Заменить' : 'Прикрепить' }}
                         </button>
                         <button
                           class="icon-action-button icon-action-button--danger"
@@ -4008,6 +4322,26 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
+            <footer class="table-pagination settings-table-pagination">
+              <span>Показано {{ settingsDocumentsRangeStart() }}–{{ settingsDocumentsRangeEnd() }} из {{ filteredDocumentRows.length }}</span>
+              <div class="table-pagination__controls">
+                <label>
+                  Записей на странице
+                  <select v-model="settingsDocumentsPageSize" @change="changeSettingsDocumentsPageSize">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <div v-if="settingsDocumentsPageSize !== 'all'" class="table-pagination__pages">
+                  <button type="button" :disabled="settingsDocumentsPage === 1" aria-label="Предыдущая страница" @click="changeSettingsDocumentsPage(settingsDocumentsPage - 1)">‹</button>
+                  <strong>{{ settingsDocumentsPage }} / {{ settingsDocumentsPageCount() }}</strong>
+                  <button type="button" :disabled="settingsDocumentsPage >= settingsDocumentsPageCount()" aria-label="Следующая страница" @click="changeSettingsDocumentsPage(settingsDocumentsPage + 1)">›</button>
+                </div>
+              </div>
+            </footer>
           </section>
         </section>
       </section>

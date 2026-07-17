@@ -333,24 +333,31 @@ func (r *SystemCatalogRepository) SystemTypeImage(ctx context.Context, slug stri
 func (r *SystemCatalogRepository) NavParserSettings(ctx context.Context) (model.NavParserSettings, error) {
 	var settings model.NavParserSettings
 	if err := r.db.QueryRowContext(ctx, `
-		SELECT update_interval_days, last_run_at
+		SELECT update_interval_days, worker_count, request_timeout_seconds,
+			retry_attempts, retry_delay_seconds, fallback_search, last_run_at
 		FROM nav_parser_settings
 		WHERE id = TRUE
-	`).Scan(&settings.UpdateIntervalDays, &settings.LastRunAt); err != nil {
+	`).Scan(&settings.UpdateIntervalDays, &settings.WorkerCount, &settings.RequestTimeoutSecs,
+		&settings.RetryAttempts, &settings.RetryDelaySecs, &settings.FallbackSearch, &settings.LastRunAt); err != nil {
 		return model.NavParserSettings{}, fmt.Errorf("load nav parser settings: %w", err)
 	}
 	return settings, nil
 }
 
-func (r *SystemCatalogRepository) UpdateNavParserInterval(ctx context.Context, days int) (model.NavParserSettings, error) {
+func (r *SystemCatalogRepository) UpdateNavParserSettings(ctx context.Context, input model.NavParserSettings) (model.NavParserSettings, error) {
 	var settings model.NavParserSettings
 	if err := r.db.QueryRowContext(ctx, `
 		UPDATE nav_parser_settings
-		SET update_interval_days = $1
+		SET update_interval_days = $1, worker_count = $2, request_timeout_seconds = $3,
+			retry_attempts = $4, retry_delay_seconds = $5, fallback_search = $6
 		WHERE id = TRUE
-		RETURNING update_interval_days, last_run_at
-	`, days).Scan(&settings.UpdateIntervalDays, &settings.LastRunAt); err != nil {
-		return model.NavParserSettings{}, fmt.Errorf("update nav parser interval: %w", err)
+		RETURNING update_interval_days, worker_count, request_timeout_seconds,
+			retry_attempts, retry_delay_seconds, fallback_search, last_run_at
+	`, input.UpdateIntervalDays, input.WorkerCount, input.RequestTimeoutSecs,
+		input.RetryAttempts, input.RetryDelaySecs, input.FallbackSearch).Scan(
+		&settings.UpdateIntervalDays, &settings.WorkerCount, &settings.RequestTimeoutSecs,
+		&settings.RetryAttempts, &settings.RetryDelaySecs, &settings.FallbackSearch, &settings.LastRunAt); err != nil {
+		return model.NavParserSettings{}, fmt.Errorf("update nav parser settings: %w", err)
 	}
 	return settings, nil
 }
