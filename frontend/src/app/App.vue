@@ -273,6 +273,9 @@ const activeChangeFilterCount = computed(() => [
 ].filter(Boolean).length)
 const hasActiveChangeFilters = computed(() => activeChangeFilterCount.value > 0)
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
+const settingsSystemCatalogPageSize = ref('10')
+const settingsSystemCatalogPage = ref(1)
+const isSettingsSystemCatalogUnlocked = ref(false)
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
 const systemDocumentPageSize = ref('20')
 const systemDocumentPage = ref(1)
@@ -282,6 +285,8 @@ const systemsConstructionTypes = computed(() => constructionTypes.map((name) => 
 })))
 const documentRows = ref<SystemDocumentRow[]>([])
 const documentSearch = ref('')
+const settingsDocumentsPageSize = ref('10')
+const settingsDocumentsPage = ref(1)
 const documentError = ref('')
 const isDocumentTableLoading = ref(false)
 const classificationCatalogRows = ref<SystemCatalogRow[]>([])
@@ -588,6 +593,8 @@ async function loadOrders() {
 async function selectOrder(order: Order) {
   selectedOrderId.value = order.id
   isSettingsClassificationUnlocked.value = false
+  isSettingsSystemCatalogUnlocked.value = false
+  settingsSystemCatalogPage.value = 1
   changesLastRefreshedAt.value = ''
   systemsLastRefreshedAt.value = ''
   classificationCatalogPage.value = 1
@@ -1322,6 +1329,7 @@ async function importSystemCatalogFile(event: Event) {
     selectedSystemCatalogClass.value = 'Все'
     selectedSystemCatalogCurator.value = 'Все кураторы'
     systemCatalogSearch.value = ''
+    settingsSystemCatalogPage.value = 1
     const payload: SystemCatalogResponse = await response.json()
     applySystemCatalogPayload(payload)
     classificationCatalogRows.value = payload.rows
@@ -1457,8 +1465,47 @@ function applyNavParserSettings(settings: NavParserSettings) {
   navParserNextRunAt.value = settings.nextRunAt ?? null
 }
 
-function currentSystemCatalogRows() {
-  return systemCatalogRows.value
+function currentSettingsSystemCatalogRows() {
+  const query = systemCatalogSearch.value.trim().toLocaleLowerCase('ru-RU')
+  return systemCatalogRows.value.filter((row) => !query || [row.code, row.systemName, row.curator]
+    .some((value) => value.toLocaleLowerCase('ru-RU').includes(query)))
+}
+
+function visibleSettingsSystemCatalogRows() {
+  const rows = currentSettingsSystemCatalogRows()
+  if (settingsSystemCatalogPageSize.value === 'all') return rows
+  const pageSize = Number(settingsSystemCatalogPageSize.value)
+  const start = (settingsSystemCatalogPage.value - 1) * pageSize
+  return rows.slice(start, start + pageSize)
+}
+
+function settingsSystemCatalogPageCount() {
+  if (settingsSystemCatalogPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(currentSettingsSystemCatalogRows().length / Number(settingsSystemCatalogPageSize.value)))
+}
+
+function settingsSystemCatalogRangeStart() {
+  if (currentSettingsSystemCatalogRows().length === 0) return 0
+  if (settingsSystemCatalogPageSize.value === 'all') return 1
+  return (settingsSystemCatalogPage.value - 1) * Number(settingsSystemCatalogPageSize.value) + 1
+}
+
+function settingsSystemCatalogRangeEnd() {
+  if (settingsSystemCatalogPageSize.value === 'all') return currentSettingsSystemCatalogRows().length
+  return Math.min(settingsSystemCatalogPage.value * Number(settingsSystemCatalogPageSize.value), currentSettingsSystemCatalogRows().length)
+}
+
+function changeSettingsSystemCatalogPageSize() {
+  settingsSystemCatalogPage.value = 1
+}
+
+async function changeSettingsSystemCatalogPage(nextPage: number) {
+  settingsSystemCatalogPage.value = Math.min(Math.max(nextPage, 1), settingsSystemCatalogPageCount())
+  await nextTick()
+  document.querySelector<HTMLElement>('.settings-system-catalog-block')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
 }
 
 function scheduleSystemCatalogRowSave(row: SystemCatalogRow) {
@@ -1839,6 +1886,42 @@ const filteredDocumentRows = computed(() => {
   )
 })
 
+const visibleDocumentRows = computed(() => {
+  if (settingsDocumentsPageSize.value === 'all') return filteredDocumentRows.value
+  const pageSize = Number(settingsDocumentsPageSize.value)
+  const start = (settingsDocumentsPage.value - 1) * pageSize
+  return filteredDocumentRows.value.slice(start, start + pageSize)
+})
+
+function settingsDocumentsPageCount() {
+  if (settingsDocumentsPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(filteredDocumentRows.value.length / Number(settingsDocumentsPageSize.value)))
+}
+
+function settingsDocumentsRangeStart() {
+  if (filteredDocumentRows.value.length === 0) return 0
+  if (settingsDocumentsPageSize.value === 'all') return 1
+  return (settingsDocumentsPage.value - 1) * Number(settingsDocumentsPageSize.value) + 1
+}
+
+function settingsDocumentsRangeEnd() {
+  if (settingsDocumentsPageSize.value === 'all') return filteredDocumentRows.value.length
+  return Math.min(settingsDocumentsPage.value * Number(settingsDocumentsPageSize.value), filteredDocumentRows.value.length)
+}
+
+function changeSettingsDocumentsPageSize() {
+  settingsDocumentsPage.value = 1
+}
+
+async function changeSettingsDocumentsPage(nextPage: number) {
+  settingsDocumentsPage.value = Math.min(Math.max(nextPage, 1), settingsDocumentsPageCount())
+  await nextTick()
+  document.querySelector<HTMLElement>('.settings-documents-block')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+}
+
 function scheduleDocumentCommentSave(row: SystemDocumentRow) {
   const currentTimer = documentCommentTimers.get(row.id)
   if (currentTimer) {
@@ -1892,6 +1975,12 @@ async function uploadSystemDocumentAttachment(row: SystemDocumentRow, event: Eve
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file || attachmentPendingIds.value.includes(row.id)) {
+    return
+  }
+  const extension = file.name.split('.').pop()?.toLocaleLowerCase('ru-RU') ?? ''
+  if (!['pdf', 'doc', 'docx'].includes(extension)) {
+    documentError.value = 'Можно прикрепить только документы PDF, DOC или DOCX'
+    input.value = ''
     return
   }
   if (file.size > 25 * 1024 * 1024) {
@@ -3736,7 +3825,7 @@ onBeforeUnmount(() => {
             </footer>
           </section>
 
-          <section class="settings-table-block" aria-label="Таблица 2">
+          <section class="settings-table-block settings-system-catalog-block" aria-label="Таблица 2">
             <div class="settings-table-toolbar">
               <span>Таблица 2</span>
               <label class="settings-search">
@@ -3744,7 +3833,7 @@ onBeforeUnmount(() => {
                   v-model="systemCatalogSearch"
                   type="search"
                   placeholder="Поиск по названию или ЕКН"
-                  @keyup.enter="loadSystemCatalog()"
+                  @input="settingsSystemCatalogPage = 1"
                 />
               </label>
               <button class="import-button" type="button" :disabled="isSystemCatalogLoading" @click="openSystemCatalogImport">
@@ -3762,26 +3851,41 @@ onBeforeUnmount(() => {
 
             <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
 
-            <div class="systems-table settings-data-table settings-table-scroll">
+            <div class="systems-table settings-data-table settings-paginated-table settings-classification-table settings-system-catalog-table">
               <table>
                 <thead>
                   <tr>
                     <th>Шифр</th>
                     <th>Название системы</th>
                     <th>Класс</th>
-                    <th>Куратор</th>
+                    <th>
+                      <span class="settings-class-header settings-curator-header">
+                        <span>Куратор</span>
+                        <button
+                          type="button"
+                          :class="{ 'is-unlocked': isSettingsSystemCatalogUnlocked }"
+                          :aria-label="isSettingsSystemCatalogUnlocked ? 'Заблокировать редактирование' : 'Разрешить редактирование'"
+                          :title="isSettingsSystemCatalogUnlocked ? 'Редактирование разрешено' : 'Редактирование заблокировано'"
+                          @click="isSettingsSystemCatalogUnlocked = !isSettingsSystemCatalogUnlocked"
+                        >
+                          <Unlock v-if="isSettingsSystemCatalogUnlocked" :size="16" :stroke-width="2" aria-hidden="true" />
+                          <Lock v-else :size="16" :stroke-width="2" aria-hidden="true" />
+                        </button>
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="currentSystemCatalogRows().length === 0">
+                  <tr v-if="currentSettingsSystemCatalogRows().length === 0">
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 2</td>
                   </tr>
-                  <tr v-for="row in currentSystemCatalogRows()" :key="`settings-system-${row.id}`">
+                  <tr v-for="row in visibleSettingsSystemCatalogRows()" :key="`settings-system-${row.id}`">
                     <td>
                       <input
                         v-model="row.code"
                         class="settings-cell-input"
                         type="text"
+                        :disabled="!isSettingsSystemCatalogUnlocked"
                         aria-label="Шифр системы"
                         @input="scheduleSystemCatalogRowSave(row)"
                         @blur="saveSystemCatalogRow(row)"
@@ -3792,13 +3896,14 @@ onBeforeUnmount(() => {
                         v-model="row.systemName"
                         class="settings-cell-input"
                         type="text"
+                        :disabled="!isSettingsSystemCatalogUnlocked"
                         aria-label="Название системы"
                         @input="scheduleSystemCatalogRowSave(row)"
                         @blur="saveSystemCatalogRow(row)"
                       />
                     </td>
                     <td :class="`status-cell status-cell--${classModifier(row.systemClass)}`">
-                      <select v-model="row.systemClass" class="settings-cell-select" aria-label="Класс системы" @change="saveSystemCatalogRow(row)">
+                      <select v-model="row.systemClass" :disabled="!isSettingsSystemCatalogUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.systemClass) || 'new'}`" aria-label="Класс системы" @change="saveSystemCatalogRow(row)">
                         <option v-for="option in classOptions" :key="`catalog-${option}`" :value="option">{{ option }}</option>
                       </select>
                     </td>
@@ -3807,6 +3912,7 @@ onBeforeUnmount(() => {
                         v-model="row.curator"
                         class="settings-cell-input"
                         type="text"
+                        :disabled="!isSettingsSystemCatalogUnlocked"
                         aria-label="Куратор"
                         @input="scheduleSystemCatalogRowSave(row)"
                         @blur="saveSystemCatalogRow(row)"
@@ -3816,28 +3922,50 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
+            <footer v-if="currentSettingsSystemCatalogRows().length > 0" class="table-pagination settings-table-pagination">
+              <span class="table-pagination__range">
+                Показано {{ settingsSystemCatalogRangeStart() }}–{{ settingsSystemCatalogRangeEnd() }} из {{ currentSettingsSystemCatalogRows().length }}
+              </span>
+              <div class="table-pagination__controls">
+                <label>
+                  <span>Записей на странице</span>
+                  <select v-model="settingsSystemCatalogPageSize" @change="changeSettingsSystemCatalogPageSize">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <div v-if="settingsSystemCatalogPageSize !== 'all'" class="table-pagination__pages">
+                  <button type="button" :disabled="settingsSystemCatalogPage === 1" aria-label="Предыдущая страница" @click="changeSettingsSystemCatalogPage(settingsSystemCatalogPage - 1)">‹</button>
+                  <strong>{{ settingsSystemCatalogPage }} / {{ settingsSystemCatalogPageCount() }}</strong>
+                  <button type="button" :disabled="settingsSystemCatalogPage >= settingsSystemCatalogPageCount()" aria-label="Следующая страница" @click="changeSettingsSystemCatalogPage(settingsSystemCatalogPage + 1)">›</button>
+                </div>
+              </div>
+            </footer>
           </section>
 
-          <section class="settings-table-block settings-table-block--documents" aria-label="Таблица 3">
+          <section class="settings-table-block settings-table-block--documents settings-documents-block" aria-label="Таблица 3">
             <div class="settings-table-toolbar">
               <span class="settings-table-title">
                 <strong>Таблица 3</strong>
                 <small>Комментарии и документы по системам</small>
               </span>
               <label class="settings-search">
-                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или ЕКН" />
+                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или ЕКН" @input="settingsDocumentsPage = 1" />
               </label>
             </div>
 
             <p class="settings-table-note">
               <Info :size="17" :stroke-width="1.8" aria-hidden="true" />
-              Здесь можно добавлять комментарии и прикреплять документы к системам.
+              Комментарии сохраняются автоматически. К каждой системе можно прикрепить один файл PDF, DOC или DOCX размером до 25 МБ.
             </p>
 
             <p v-if="documentError" class="table-message table-message--error">{{ documentError }}</p>
             <p v-else-if="isDocumentTableLoading" class="table-message">Загрузка таблицы 3...</p>
 
-            <div class="systems-table settings-docs-table settings-table-scroll">
+            <div class="systems-table settings-docs-table settings-paginated-table">
               <table>
                 <thead>
                   <tr>
@@ -3851,7 +3979,7 @@ onBeforeUnmount(() => {
                   <tr v-if="filteredDocumentRows.length === 0">
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 3</td>
                   </tr>
-                  <tr v-for="row in filteredDocumentRows" :key="`document-${row.id}`">
+                  <tr v-for="row in visibleDocumentRows" :key="`document-${row.id}`">
                     <td>
                       <strong>{{ row.systemName }}</strong>
                       <small class="settings-docs-table__code">{{ row.code }}</small>
@@ -3894,17 +4022,19 @@ onBeforeUnmount(() => {
                           :id="`document-attachment-${row.id}`"
                           class="visually-hidden-input"
                           type="file"
+                          accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                           @change="uploadSystemDocumentAttachment(row, $event)"
                         />
                         <button
-                          class="icon-action-button"
+                          class="document-upload-button"
                           type="button"
                           :disabled="attachmentPendingIds.includes(row.id)"
                           :aria-label="row.attachmentName ? 'Изменить документ' : 'Загрузить документ'"
                           @click="openAttachmentPicker(row)"
                         >
-                          <RefreshCw v-if="row.attachmentName" :size="17" :stroke-width="1.8" aria-hidden="true" />
-                          <CloudUpload v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
+                          <RefreshCw v-if="row.attachmentName" :size="16" :stroke-width="1.8" aria-hidden="true" />
+                          <CloudUpload v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
+                          {{ row.attachmentName ? 'Заменить' : 'Прикрепить' }}
                         </button>
                         <button
                           class="icon-action-button icon-action-button--danger"
@@ -3921,6 +4051,26 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
+            <footer class="table-pagination settings-table-pagination">
+              <span>Показано {{ settingsDocumentsRangeStart() }}–{{ settingsDocumentsRangeEnd() }} из {{ filteredDocumentRows.length }}</span>
+              <div class="table-pagination__controls">
+                <label>
+                  Записей на странице
+                  <select v-model="settingsDocumentsPageSize" @change="changeSettingsDocumentsPageSize">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <div v-if="settingsDocumentsPageSize !== 'all'" class="table-pagination__pages">
+                  <button type="button" :disabled="settingsDocumentsPage === 1" aria-label="Предыдущая страница" @click="changeSettingsDocumentsPage(settingsDocumentsPage - 1)">‹</button>
+                  <strong>{{ settingsDocumentsPage }} / {{ settingsDocumentsPageCount() }}</strong>
+                  <button type="button" :disabled="settingsDocumentsPage >= settingsDocumentsPageCount()" aria-label="Следующая страница" @click="changeSettingsDocumentsPage(settingsDocumentsPage + 1)">›</button>
+                </div>
+              </div>
+            </footer>
           </section>
         </section>
       </section>

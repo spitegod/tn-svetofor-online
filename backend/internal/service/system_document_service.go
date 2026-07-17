@@ -268,6 +268,10 @@ func (s *SystemDocumentService) SaveAttachment(ctx context.Context, id int64, or
 	if attachment.Size > MaxSystemDocumentAttachmentSize {
 		return fmt.Errorf("attachment exceeds 25 MB")
 	}
+	extension := strings.ToLower(filepath.Ext(attachment.Name))
+	if extension != ".pdf" && extension != ".doc" && extension != ".docx" {
+		return fmt.Errorf("attachment must be PDF, DOC or DOCX")
+	}
 	if attachment.ContentType == "" {
 		attachment.ContentType = "application/octet-stream"
 	}
