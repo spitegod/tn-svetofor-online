@@ -32,3 +32,21 @@ func TestResolveNavAssetURLRejectsExternalHost(t *testing.T) {
 		t.Fatalf("expected external image URL to be rejected, got %q", resolved)
 	}
 }
+
+func TestParserSystemPercent(t *testing.T) {
+	tests := []struct {
+		processed int
+		total     int
+		want      int
+	}{
+		{processed: 0, total: 100, want: 30},
+		{processed: 50, total: 100, want: 64},
+		{processed: 100, total: 100, want: 98},
+		{processed: 10, total: 0, want: 30},
+	}
+	for _, test := range tests {
+		if got := parserSystemPercent(test.processed, test.total); got != test.want {
+			t.Errorf("parserSystemPercent(%d, %d) = %d, want %d", test.processed, test.total, got, test.want)
+		}
+	}
+}

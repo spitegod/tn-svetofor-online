@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,10 +24,16 @@ import (
 const navBaseURL = "https://nav.tn.ru"
 
 type NavParserService struct {
-	repo    *repository.SystemCatalogRepository
-	client  *http.Client
-	parseMu sync.Mutex
+	repo       *repository.SystemCatalogRepository
+	client     *http.Client
+	parseMu    sync.Mutex
+	progressMu sync.RWMutex
+	progress   model.NavParserProgress
 }
+
+var ErrNavParserRunning = errors.New("NAV parser is already running")
+
+const maxNavParserLogs = 400
 
 type navSystemLink struct {
 	Name       string
@@ -48,26 +55,50 @@ func NewNavParserService(repo *repository.SystemCatalogRepository) *NavParserSer
 	return &NavParserService{
 		repo:   repo,
 		client: &http.Client{Timeout: 35 * time.Second},
+		progress: model.NavParserProgress{
+			Stage:   "Ожидание",
+			Message: "Парсер готов к запуску",
+			Logs:    make([]model.NavParserLogEntry, 0),
+		},
 	}
 }
 
-func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, error) {
-	s.parseMu.Lock()
+func (s *NavParserService) Parse(ctx context.Context) (report model.NavParseReport, parseErr error) {
+	return s.parse(ctx, "manual")
+}
+
+func (s *NavParserService) parse(ctx context.Context, source string) (report model.NavParseReport, parseErr error) {
+	if !s.parseMu.TryLock() {
+		return model.NavParseReport{}, ErrNavParserRunning
+	}
 	defer s.parseMu.Unlock()
+	s.beginProgress(source)
+	defer func() {
+		if parseErr != nil {
+			s.failProgress(parseErr)
+		}
+	}()
 
 	rows, err := s.repo.ParserRows(ctx)
 	if err != nil {
 		return model.NavParseReport{}, err
 	}
-	report := model.NavParseReport{Total: len(rows), NotFound: make([]string, 0)}
+	report = model.NavParseReport{Total: len(rows), NotFound: make([]string, 0)}
+	s.setProgressTotal(len(rows))
 	if len(rows) == 0 {
-		return report, s.repo.MarkNavParserRun(ctx)
+		if err := s.repo.MarkNavParserRun(ctx); err != nil {
+			return report, err
+		}
+		s.completeProgress(report)
+		return report, nil
 	}
 
+	s.setProgressStage("Каталог NAV", "Загружаем типы и ссылки на системы", 3)
 	links, err := s.crawlCatalog(ctx)
 	if err != nil {
 		return model.NavParseReport{}, err
 	}
+	s.setProgressStage("Сопоставление", "Сопоставляем системы с каталогом NAV", 28)
 	linksByName := make(map[string]navSystemLink, len(links))
 	for _, link := range links {
 		key := normalizeSystemName(link.Name)
@@ -85,11 +116,13 @@ func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, err
 		link, ok := linksByName[normalizeSystemName(row.SystemName)]
 		if !ok {
 			report.NotFound = append(report.NotFound, row.SystemName)
+			s.appendProgressLog("warning", "Не найдена в NAV: "+row.SystemName)
 			continue
 		}
 		report.Found++
 		jobs = append(jobs, parseJob{row: row, link: link})
 	}
+	s.setMatchedProgress(report)
 
 	jobCh := make(chan parseJob)
 	var wg sync.WaitGroup
@@ -103,8 +136,8 @@ func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, err
 		go func() {
 			defer wg.Done()
 			for job := range jobCh {
-				characteristics, err := s.scrapeCharacteristics(ctx, job.link.URL)
-				if err == nil {
+				characteristics, jobErr := s.scrapeCharacteristics(ctx, job.link.URL)
+				if jobErr == nil {
 					characteristics = append([]model.SystemCharacteristic{{
 						Position: 1,
 						Name:     "Тип системы",
@@ -113,15 +146,17 @@ func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, err
 					for index := range characteristics {
 						characteristics[index].Position = index + 1
 					}
-					err = s.repo.SaveParsed(ctx, job.row.SystemName, job.link.URL, characteristics)
+					jobErr = s.repo.SaveParsed(ctx, job.row.SystemName, job.link.URL, characteristics)
 				}
 				mu.Lock()
-				if err != nil {
+				if jobErr != nil {
 					report.Failed++
 				} else {
 					report.Updated++
 				}
+				snapshot := report
 				mu.Unlock()
+				s.recordSystemProgress(job.row.SystemName, jobErr, snapshot)
 			}
 		}()
 	}
@@ -141,7 +176,162 @@ func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, err
 		return report, err
 	}
 
+	s.completeProgress(report)
 	return report, nil
+}
+
+func (s *NavParserService) Status() model.NavParserProgress {
+	s.progressMu.RLock()
+	defer s.progressMu.RUnlock()
+	result := s.progress
+	result.Logs = make([]model.NavParserLogEntry, len(s.progress.Logs))
+	copy(result.Logs, s.progress.Logs)
+	return result
+}
+
+func (s *NavParserService) Runs(ctx context.Context, limit int) ([]model.NavParserRun, error) {
+	return s.repo.NavParserRuns(ctx, limit)
+}
+
+func (s *NavParserService) beginProgress(source string) {
+	now := time.Now()
+	s.progressMu.Lock()
+	s.progress = model.NavParserProgress{
+		Running:   true,
+		Source:    source,
+		Stage:     "Подготовка",
+		Message:   "Получаем список систем для обновления",
+		Percent:   1,
+		StartedAt: &now,
+		Logs:      make([]model.NavParserLogEntry, 0, 64),
+	}
+	s.appendProgressLogLocked("info", "Запуск парсера NAV")
+	s.progressMu.Unlock()
+}
+
+func (s *NavParserService) setProgressTotal(total int) {
+	s.progressMu.Lock()
+	s.progress.Total = total
+	s.appendProgressLogLocked("info", fmt.Sprintf("Получено систем для обработки: %d", total))
+	s.progressMu.Unlock()
+}
+
+func (s *NavParserService) setProgressStage(stage string, message string, percent int) {
+	s.progressMu.Lock()
+	s.progress.Stage = stage
+	s.progress.Message = message
+	s.progress.Percent = percent
+	s.appendProgressLogLocked("info", message)
+	s.progressMu.Unlock()
+}
+
+func (s *NavParserService) setMatchedProgress(report model.NavParseReport) {
+	s.progressMu.Lock()
+	s.progress.Stage = "Характеристики"
+	s.progress.Message = "Загружаем характеристики найденных систем"
+	s.progress.Found = report.Found
+	s.progress.NotFound = len(report.NotFound)
+	s.progress.Processed = len(report.NotFound)
+	s.progress.Percent = parserSystemPercent(s.progress.Processed, report.Total)
+	s.appendProgressLogLocked("info", fmt.Sprintf("Сопоставление завершено: найдено %d, не найдено %d", report.Found, len(report.NotFound)))
+	s.progressMu.Unlock()
+}
+
+func (s *NavParserService) recordSystemProgress(systemName string, err error, report model.NavParseReport) {
+	s.progressMu.Lock()
+	s.progress.Processed = len(report.NotFound) + report.Updated + report.Failed
+	s.progress.Found = report.Found
+	s.progress.Updated = report.Updated
+	s.progress.Failed = report.Failed
+	s.progress.NotFound = len(report.NotFound)
+	s.progress.Percent = parserSystemPercent(s.progress.Processed, report.Total)
+	s.progress.Message = fmt.Sprintf("Обработано %d из %d систем", s.progress.Processed, report.Total)
+	if err != nil {
+		s.appendProgressLogLocked("error", fmt.Sprintf("Ошибка обработки %s: %v", systemName, err))
+	} else {
+		s.appendProgressLogLocked("success", "Обновлена: "+systemName)
+	}
+	s.progressMu.Unlock()
+}
+
+func (s *NavParserService) completeProgress(report model.NavParseReport) {
+	now := time.Now()
+	s.progressMu.Lock()
+	s.progress.Running = false
+	s.progress.Stage = "Завершено"
+	s.progress.Message = fmt.Sprintf("Обновлено %d из %d систем", report.Updated, report.Total)
+	s.progress.Percent = 100
+	s.progress.Processed = report.Total
+	s.progress.Total = report.Total
+	s.progress.Found = report.Found
+	s.progress.Updated = report.Updated
+	s.progress.Failed = report.Failed
+	s.progress.NotFound = len(report.NotFound)
+	s.progress.FinishedAt = &now
+	s.appendProgressLogLocked("success", fmt.Sprintf("Парсинг завершён: обновлено %d, ошибок %d, не найдено %d", report.Updated, report.Failed, len(report.NotFound)))
+	s.progressMu.Unlock()
+	s.persistProgress("completed")
+}
+
+func (s *NavParserService) failProgress(err error) {
+	now := time.Now()
+	s.progressMu.Lock()
+	s.progress.Running = false
+	s.progress.Stage = "Ошибка"
+	s.progress.Message = err.Error()
+	s.progress.FinishedAt = &now
+	s.appendProgressLogLocked("error", "Парсинг остановлен: "+err.Error())
+	s.progressMu.Unlock()
+	s.persistProgress("failed")
+}
+
+func (s *NavParserService) persistProgress(status string) {
+	progress := s.Status()
+	if progress.StartedAt == nil || progress.FinishedAt == nil {
+		return
+	}
+	run := model.NavParserRun{
+		Source:     progress.Source,
+		Status:     status,
+		Message:    progress.Message,
+		Total:      progress.Total,
+		Found:      progress.Found,
+		Updated:    progress.Updated,
+		Failed:     progress.Failed,
+		NotFound:   progress.NotFound,
+		StartedAt:  *progress.StartedAt,
+		FinishedAt: *progress.FinishedAt,
+		Logs:       progress.Logs,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.repo.SaveNavParserRun(ctx, run); err != nil {
+		log.Printf("save NAV parser run history: %v", err)
+	}
+}
+
+func (s *NavParserService) appendProgressLog(level string, message string) {
+	s.progressMu.Lock()
+	s.appendProgressLogLocked(level, message)
+	s.progressMu.Unlock()
+}
+
+func (s *NavParserService) appendProgressLogLocked(level string, message string) {
+	s.progress.Logs = append(s.progress.Logs, model.NavParserLogEntry{Time: time.Now(), Level: level, Message: message})
+	if len(s.progress.Logs) > maxNavParserLogs {
+		s.progress.Logs = append([]model.NavParserLogEntry(nil), s.progress.Logs[len(s.progress.Logs)-maxNavParserLogs:]...)
+	}
+}
+
+func parserSystemPercent(processed int, total int) int {
+	if total <= 0 {
+		return 30
+	}
+	percent := 30 + processed*68/total
+	if percent > 98 {
+		return 98
+	}
+	return percent
 }
 
 func (s *NavParserService) Settings(ctx context.Context) (model.NavParserSettings, error) {
@@ -187,7 +377,7 @@ func (s *NavParserService) runScheduledParseIfDue(ctx context.Context) {
 	if settings.LastRunAt == nil || settings.NextRunAt == nil || time.Now().Before(*settings.NextRunAt) {
 		return
 	}
-	if _, err := s.Parse(ctx); err != nil {
+	if _, err := s.parse(ctx, "scheduled"); err != nil && !errors.Is(err, ErrNavParserRunning) {
 		log.Printf("scheduled NAV parsing failed: %v", err)
 	}
 }
@@ -209,6 +399,7 @@ func (s *NavParserService) crawlCatalog(ctx context.Context) ([]navSystemLink, e
 	if len(categories) == 0 {
 		return nil, fmt.Errorf("nav.tn.ru systems catalog has no categories")
 	}
+	s.setCatalogProgress(0, len(categories), "")
 
 	type categoryResult struct {
 		category navCategory
@@ -259,10 +450,13 @@ func (s *NavParserService) crawlCatalog(ctx context.Context) ([]navSystemLink, e
 
 	byURL := make(map[string]navSystemLink)
 	parsedCategories := make([]navCategory, 0, len(categories))
+	completedCategories := 0
 	for result := range resultCh {
 		if result.err != nil {
 			return nil, result.err
 		}
+		completedCategories++
+		s.setCatalogProgress(completedCategories, len(categories), result.category.Name)
 		parsedCategories = append(parsedCategories, result.category)
 		for _, link := range result.links {
 			byURL[link.URL] = link
@@ -293,6 +487,22 @@ func (s *NavParserService) crawlCatalog(ctx context.Context) ([]navSystemLink, e
 		links = append(links, link)
 	}
 	return links, nil
+}
+
+func (s *NavParserService) setCatalogProgress(completed int, total int, categoryName string) {
+	s.progressMu.Lock()
+	s.progress.Stage = "Каталог NAV"
+	s.progress.Percent = 5
+	if total > 0 {
+		s.progress.Percent = 5 + completed*22/total
+	}
+	s.progress.Message = fmt.Sprintf("Обработано категорий: %d из %d", completed, total)
+	if completed == 0 {
+		s.appendProgressLogLocked("info", fmt.Sprintf("Найдено категорий систем: %d", total))
+	} else if categoryName != "" {
+		s.appendProgressLogLocked("info", fmt.Sprintf("Категория %d/%d: %s", completed, total, categoryName))
+	}
+	s.progressMu.Unlock()
 }
 
 func (s *NavParserService) crawlCategory(ctx context.Context, categoryURL string) ([]navSystemLink, string, error) {

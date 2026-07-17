@@ -366,6 +366,95 @@ func (r *SystemCatalogRepository) MarkNavParserRun(ctx context.Context) error {
 	return nil
 }
 
+func (r *SystemCatalogRepository) SaveNavParserRun(ctx context.Context, run model.NavParserRun) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin save nav parser run: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := tx.QueryRowContext(ctx, `
+		INSERT INTO nav_parser_runs (
+			source, status, message, total, found, updated, failed, not_found, started_at, finished_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id
+	`, run.Source, run.Status, run.Message, run.Total, run.Found, run.Updated, run.Failed, run.NotFound, run.StartedAt, run.FinishedAt).Scan(&run.ID); err != nil {
+		return fmt.Errorf("insert nav parser run: %w", err)
+	}
+
+	for _, entry := range run.Logs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO nav_parser_run_logs (run_id, logged_at, level, message)
+			VALUES ($1, $2, $3, $4)
+		`, run.ID, entry.Time, entry.Level, entry.Message); err != nil {
+			return fmt.Errorf("insert nav parser run log: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit nav parser run: %w", err)
+	}
+	return nil
+}
+
+func (r *SystemCatalogRepository) NavParserRuns(ctx context.Context, limit int) ([]model.NavParserRun, error) {
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	result, err := r.db.QueryContext(ctx, `
+		SELECT id, source, status, message, total, found, updated, failed, not_found, started_at, finished_at
+		FROM nav_parser_runs
+		ORDER BY started_at DESC, id DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list nav parser runs: %w", err)
+	}
+	runs := make([]model.NavParserRun, 0)
+	for result.Next() {
+		var run model.NavParserRun
+		if err := result.Scan(&run.ID, &run.Source, &run.Status, &run.Message, &run.Total, &run.Found, &run.Updated, &run.Failed, &run.NotFound, &run.StartedAt, &run.FinishedAt); err != nil {
+			return nil, fmt.Errorf("scan nav parser run: %w", err)
+		}
+		run.Logs = make([]model.NavParserLogEntry, 0)
+		runs = append(runs, run)
+	}
+	if err := result.Err(); err != nil {
+		return nil, fmt.Errorf("iterate nav parser runs: %w", err)
+	}
+	if err := result.Close(); err != nil {
+		return nil, fmt.Errorf("close nav parser runs: %w", err)
+	}
+
+	for index := range runs {
+		logs, err := r.db.QueryContext(ctx, `
+			SELECT logged_at, level, message
+			FROM nav_parser_run_logs
+			WHERE run_id = $1
+			ORDER BY id
+		`, runs[index].ID)
+		if err != nil {
+			return nil, fmt.Errorf("list nav parser run logs: %w", err)
+		}
+		for logs.Next() {
+			var entry model.NavParserLogEntry
+			if err := logs.Scan(&entry.Time, &entry.Level, &entry.Message); err != nil {
+				_ = logs.Close()
+				return nil, fmt.Errorf("scan nav parser run log: %w", err)
+			}
+			runs[index].Logs = append(runs[index].Logs, entry)
+		}
+		if err := logs.Err(); err != nil {
+			_ = logs.Close()
+			return nil, fmt.Errorf("iterate nav parser run logs: %w", err)
+		}
+		if err := logs.Close(); err != nil {
+			return nil, fmt.Errorf("close nav parser run logs: %w", err)
+		}
+	}
+	return runs, nil
+}
+
 func (r *SystemCatalogRepository) loadCharacteristics(ctx context.Context, rows []model.SystemCatalogRow) error {
 	if len(rows) == 0 {
 		return nil
