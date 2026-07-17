@@ -238,6 +238,8 @@ const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
 const classificationPageSize = ref('20')
 const classificationPage = ref(1)
+const settingsClassificationPageSize = ref('10')
+const settingsClassificationPage = ref(1)
 const classificationStats = ref<ClassificationStats>({
   addedSystems: 0,
   recommended: 0,
@@ -585,6 +587,7 @@ async function selectOrder(order: Order) {
   changesLastRefreshedAt.value = ''
   systemsLastRefreshedAt.value = ''
   classificationCatalogPage.value = 1
+  settingsClassificationPage.value = 1
   openedSelect.value = null
   classificationCatalogSearch.value = ''
   classificationCatalogSearchInput.value = ''
@@ -1103,6 +1106,48 @@ function classificationRangeEnd() {
 
 function changeClassificationPageSize() {
   classificationPage.value = 1
+}
+
+function visibleSettingsClassificationRows() {
+  const rows = currentSettingsClassificationRows()
+  if (settingsClassificationPageSize.value === 'all') return rows
+  const pageSize = Number(settingsClassificationPageSize.value)
+  const start = (settingsClassificationPage.value - 1) * pageSize
+  return rows.slice(start, start + pageSize)
+}
+
+function currentSettingsClassificationRows() {
+  const query = tableSearch.value.trim().toLocaleLowerCase('ru-RU')
+  return classificationRows.value.filter((row) => !query || row.systemName.toLocaleLowerCase('ru-RU').includes(query))
+}
+
+function settingsClassificationPageCount() {
+  if (settingsClassificationPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(currentSettingsClassificationRows().length / Number(settingsClassificationPageSize.value)))
+}
+
+function settingsClassificationRangeStart() {
+  if (currentSettingsClassificationRows().length === 0) return 0
+  if (settingsClassificationPageSize.value === 'all') return 1
+  return (settingsClassificationPage.value - 1) * Number(settingsClassificationPageSize.value) + 1
+}
+
+function settingsClassificationRangeEnd() {
+  if (settingsClassificationPageSize.value === 'all') return currentSettingsClassificationRows().length
+  return Math.min(settingsClassificationPage.value * Number(settingsClassificationPageSize.value), currentSettingsClassificationRows().length)
+}
+
+function changeSettingsClassificationPageSize() {
+  settingsClassificationPage.value = 1
+}
+
+async function changeSettingsClassificationPage(nextPage: number) {
+  settingsClassificationPage.value = Math.min(Math.max(nextPage, 1), settingsClassificationPageCount())
+  await nextTick()
+  document.querySelector<HTMLElement>('.settings-classification-block')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
 }
 
 async function changeClassificationPage(nextPage: number) {
@@ -3481,10 +3526,19 @@ onBeforeUnmount(() => {
         </section>
 
         <section class="settings-section orders-settings" aria-labelledby="orders-db-title">
-          <div class="settings-section__header">
-            <div>
-              <span class="settings-section__eyebrow">Распоряжения</span>
-              <h2 id="orders-db-title">Управление базами данных</h2>
+          <div class="settings-section__header settings-orders-header">
+            <div class="settings-orders-heading">
+              <span class="settings-orders-heading__icon" aria-hidden="true">
+                <Database :size="22" :stroke-width="1.8" />
+              </span>
+              <div>
+                <span class="settings-section__eyebrow">Распоряжения</span>
+                <span class="settings-orders-heading__title">
+                  <h2 id="orders-db-title">Управление базами данных</h2>
+                  <em>Баз: {{ orders.length }}</em>
+                </span>
+                <p>Каждое распоряжение хранит отдельный набор систем, классов и комментариев.</p>
+              </div>
             </div>
             <button class="settings-create-order" type="button" @click="createOrder">
               <Plus :size="18" :stroke-width="1.8" aria-hidden="true" />
@@ -3506,7 +3560,7 @@ onBeforeUnmount(() => {
                 <tr v-for="order in orders" :key="order.id">
                   <td>
                     <span class="settings-order-name">
-                      <Database :size="17" :stroke-width="1.8" aria-hidden="true" />
+                      <i aria-hidden="true"><Database :size="17" :stroke-width="1.8" /></i>
                       <input
                         v-model="order.name"
                         class="order-name-input"
@@ -3518,8 +3572,8 @@ onBeforeUnmount(() => {
                       />
                     </span>
                   </td>
-                  <td>{{ formatOrderDateTime(order.createdAt) }}</td>
-                  <td>{{ formatOrderDateTime(order.updatedAt) }}</td>
+                  <td class="settings-order-date"><span>Создана</span><strong>{{ formatOrderDateTime(order.createdAt) }}</strong></td>
+                  <td class="settings-order-date settings-order-date--updated"><span>Обновлена</span><strong>{{ formatOrderDateTime(order.updatedAt) }}</strong></td>
                   <td class="settings-order-actions">
                     <button class="settings-order-menu-button" type="button" aria-label="Действия с распоряжением" @click.stop="settingsOrderMenuId = settingsOrderMenuId === order.id ? null : order.id">
                       <EllipsisVertical :size="19" :stroke-width="1.9" aria-hidden="true" />
@@ -3571,7 +3625,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <section class="settings-table-block" aria-label="Таблица 1">
+          <section class="settings-table-block settings-classification-block" aria-label="Таблица 1">
             <div class="settings-table-toolbar">
               <span>Таблица 1</span>
               <label class="settings-search">
@@ -3579,7 +3633,7 @@ onBeforeUnmount(() => {
                   v-model="tableSearch"
                   type="search"
                   placeholder="Поиск по названию или ЕКН"
-                  @input="classificationPage = 1"
+                  @input="settingsClassificationPage = 1"
                 />
               </label>
               <button class="import-button" type="button" :disabled="isClassificationLoading" @click="openTableImport">
@@ -3597,7 +3651,7 @@ onBeforeUnmount(() => {
 
             <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
 
-            <div class="systems-table settings-data-table settings-table-scroll">
+            <div class="systems-table settings-data-table settings-paginated-table settings-classification-table">
               <table>
                 <thead>
                   <tr>
@@ -3605,15 +3659,15 @@ onBeforeUnmount(() => {
                     <th colspan="2">Класс</th>
                   </tr>
                   <tr>
-                    <th>было</th>
-                    <th>стало</th>
+                    <th><span class="settings-class-heading settings-class-heading--before">Было</span></th>
+                    <th><span class="settings-class-heading settings-class-heading--after">Стало</span></th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="currentClassificationRows().length === 0">
+                  <tr v-if="currentSettingsClassificationRows().length === 0">
                     <td class="empty-table-cell" colspan="3">В этом распоряжении пока нет данных таблицы 1</td>
                   </tr>
-                  <tr v-for="row in currentClassificationRows()" :key="`settings-${row.id}`">
+                  <tr v-for="row in visibleSettingsClassificationRows()" :key="`settings-${row.id}`">
                     <td>
                       <input
                         v-model="row.systemName"
@@ -3625,13 +3679,13 @@ onBeforeUnmount(() => {
                       />
                     </td>
                     <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
-                      <select v-model="row.classBefore" class="settings-cell-select" aria-label="Класс было" @change="saveClassificationRow(row)">
+                      <select v-model="row.classBefore" :class="`settings-cell-select settings-cell-select--${classModifier(row.classBefore) || 'new'}`" aria-label="Класс было" @change="saveClassificationRow(row)">
                         <option value="Новая система">Новая система</option>
                         <option v-for="option in classOptions" :key="`before-${option}`" :value="option">{{ option }}</option>
                       </select>
                     </td>
                     <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
-                      <select v-model="row.classAfter" class="settings-cell-select" aria-label="Класс стало" @change="saveClassificationRow(row)">
+                      <select v-model="row.classAfter" :class="`settings-cell-select settings-cell-select--${classModifier(row.classAfter) || 'new'}`" aria-label="Класс стало" @change="saveClassificationRow(row)">
                         <option v-for="option in classOptions" :key="`after-${option}`" :value="option">{{ option }}</option>
                       </select>
                     </td>
@@ -3639,6 +3693,28 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
+            <footer v-if="currentSettingsClassificationRows().length > 0" class="table-pagination settings-table-pagination">
+              <span class="table-pagination__range">
+                Показано {{ settingsClassificationRangeStart() }}–{{ settingsClassificationRangeEnd() }} из {{ currentSettingsClassificationRows().length }}
+              </span>
+              <div class="table-pagination__controls">
+                <label>
+                  <span>Записей на странице</span>
+                  <select v-model="settingsClassificationPageSize" @change="changeSettingsClassificationPageSize">
+                    <option value="10">10</option>
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="all">Все</option>
+                  </select>
+                </label>
+                <div v-if="settingsClassificationPageSize !== 'all'" class="table-pagination__pages">
+                  <button type="button" :disabled="settingsClassificationPage === 1" aria-label="Предыдущая страница" @click="changeSettingsClassificationPage(settingsClassificationPage - 1)">‹</button>
+                  <strong>{{ settingsClassificationPage }} / {{ settingsClassificationPageCount() }}</strong>
+                  <button type="button" :disabled="settingsClassificationPage >= settingsClassificationPageCount()" aria-label="Следующая страница" @click="changeSettingsClassificationPage(settingsClassificationPage + 1)">›</button>
+                </div>
+              </div>
+            </footer>
           </section>
 
           <section class="settings-table-block" aria-label="Таблица 2">
