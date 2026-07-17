@@ -36,15 +36,22 @@ type SystemTypeImage struct {
 }
 
 type NavParseReport struct {
-	Total    int      `json:"total"`
-	Found    int      `json:"found"`
-	Updated  int      `json:"updated"`
-	Failed   int      `json:"failed"`
-	NotFound []string `json:"notFound"`
+	Total         int      `json:"total"`
+	Found         int      `json:"found"`
+	FallbackFound int      `json:"fallbackFound"`
+	Updated       int      `json:"updated"`
+	Failed        int      `json:"failed"`
+	FailedSystems []string `json:"failedSystems"`
+	NotFound      []string `json:"notFound"`
 }
 
 type NavParserSettings struct {
 	UpdateIntervalDays int        `json:"updateIntervalDays"`
+	WorkerCount        int        `json:"workerCount"`
+	RequestTimeoutSecs int        `json:"requestTimeoutSeconds"`
+	RetryAttempts      int        `json:"retryAttempts"`
+	RetryDelaySecs     int        `json:"retryDelaySeconds"`
+	FallbackSearch     bool       `json:"fallbackSearch"`
 	LastRunAt          *time.Time `json:"lastRunAt"`
 	NextRunAt          *time.Time `json:"nextRunAt"`
 }

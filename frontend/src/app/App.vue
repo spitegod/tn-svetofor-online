@@ -91,13 +91,20 @@ type SystemCharacteristic = {
 type NavParseReport = {
   total: number
   found: number
+  fallbackFound: number
   updated: number
   failed: number
+  failedSystems: string[]
   notFound: string[]
 }
 
 type NavParserSettings = {
   updateIntervalDays: number
+  workerCount: number
+  requestTimeoutSeconds: number
+  retryAttempts: number
+  retryDelaySeconds: number
+  fallbackSearch: boolean
   lastRunAt: string | null
   nextRunAt: string | null
 }
@@ -405,7 +412,15 @@ const isNavParsing = ref(false)
 const navParseMessage = ref('')
 const navParseError = ref('')
 const navParseNotFound = ref<string[]>([])
-const navParserIntervalDays = ref(7)
+const navParseFailedSystems = ref<string[]>([])
+const navParserIntervalDays = ref(1)
+const navParserWorkerCount = ref(4)
+const navParserRequestTimeout = ref(35)
+const navParserRetryAttempts = ref(3)
+const navParserRetryDelay = ref(2)
+const navParserFallbackSearch = ref(true)
+const navParserNextRunAt = ref<string | null>(null)
+const isNavParserSettingsOpen = ref(false)
 const isNavSettingsSaving = ref(false)
 const navSettingsMessage = ref('')
 const navSettingsError = ref('')
@@ -1305,6 +1320,7 @@ async function runNavParser() {
   navParseMessage.value = ''
   navParseError.value = ''
   navParseNotFound.value = []
+  navParseFailedSystems.value = []
   try {
     const response = await fetch(`${API_BASE_URL}/system-catalog/parse-nav`, { method: 'POST' })
     if (!response.ok) {
@@ -1313,8 +1329,9 @@ async function runNavParser() {
     }
 
     const report: NavParseReport = await response.json()
-    navParseMessage.value = `Обновлено ${report.updated} из ${report.total}. Найдено: ${report.found}, не найдено: ${report.notFound.length}, ошибок: ${report.failed}.`
+    navParseMessage.value = `Обновлено ${report.updated} из ${report.total}. Через резервный поиск: ${report.fallbackFound}, не найдено: ${report.notFound.length}, ошибок: ${report.failed}.`
     navParseNotFound.value = report.notFound
+    navParseFailedSystems.value = report.failedSystems ?? []
     selectedClassificationFilters.value = {}
     await Promise.all([loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings()])
   } catch (error) {
@@ -1331,7 +1348,7 @@ async function loadNavParserSettings() {
       throw new Error('Не удалось загрузить настройки парсера')
     }
     const settings: NavParserSettings = await response.json()
-    navParserIntervalDays.value = settings.updateIntervalDays
+    applyNavParserSettings(settings)
     navSettingsError.value = ''
   } catch (error) {
     navSettingsError.value = error instanceof Error ? error.message : 'Не удалось загрузить настройки парсера'
@@ -1341,6 +1358,10 @@ async function loadNavParserSettings() {
 async function saveNavParserSettings() {
   const days = Math.min(365, Math.max(1, Math.round(Number(navParserIntervalDays.value) || 1)))
   navParserIntervalDays.value = days
+  navParserWorkerCount.value = Math.min(10, Math.max(1, Math.round(Number(navParserWorkerCount.value) || 4)))
+  navParserRequestTimeout.value = Math.min(120, Math.max(5, Math.round(Number(navParserRequestTimeout.value) || 35)))
+  navParserRetryAttempts.value = Math.min(5, Math.max(1, Math.round(Number(navParserRetryAttempts.value) || 3)))
+  navParserRetryDelay.value = Math.min(30, Math.max(1, Math.round(Number(navParserRetryDelay.value) || 2)))
   isNavSettingsSaving.value = true
   navSettingsMessage.value = ''
   navSettingsError.value = ''
@@ -1348,20 +1369,43 @@ async function saveNavParserSettings() {
     const response = await fetch(`${API_BASE_URL}/nav-parser/settings`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updateIntervalDays: days }),
+      body: JSON.stringify({
+        updateIntervalDays: days,
+        workerCount: navParserWorkerCount.value,
+        requestTimeoutSeconds: navParserRequestTimeout.value,
+        retryAttempts: navParserRetryAttempts.value,
+        retryDelaySeconds: navParserRetryDelay.value,
+        fallbackSearch: navParserFallbackSearch.value,
+      }),
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
       throw new Error(payload?.error ?? 'Не удалось сохранить частоту обновления')
     }
     const settings: NavParserSettings = await response.json()
-    navParserIntervalDays.value = settings.updateIntervalDays
+    applyNavParserSettings(settings)
     navSettingsMessage.value = 'Частота обновления сохранена'
   } catch (error) {
     navSettingsError.value = error instanceof Error ? error.message : 'Не удалось сохранить частоту обновления'
   } finally {
     isNavSettingsSaving.value = false
   }
+}
+
+function navParserNextRunLabel() {
+  return navParserNextRunAt.value
+    ? `Следующий запуск: ${formatOrderDateTime(navParserNextRunAt.value)}`
+    : 'Следующий запуск — после первого успешного запуска'
+}
+
+function applyNavParserSettings(settings: NavParserSettings) {
+  navParserIntervalDays.value = settings.updateIntervalDays ?? 1
+  navParserWorkerCount.value = settings.workerCount ?? 4
+  navParserRequestTimeout.value = settings.requestTimeoutSeconds ?? 35
+  navParserRetryAttempts.value = settings.retryAttempts ?? 3
+  navParserRetryDelay.value = settings.retryDelaySeconds ?? 2
+  navParserFallbackSearch.value = settings.fallbackSearch ?? true
+  navParserNextRunAt.value = settings.nextRunAt ?? null
 }
 
 function currentSystemCatalogRows() {
@@ -3358,27 +3402,66 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="parser-settings__controls">
-              <label class="parser-frequency-field">
-                <span>Частота обновления</span>
-                <span class="parser-frequency-field__input">
-                  <input
-                    v-model.number="navParserIntervalDays"
-                    type="number"
-                    min="1"
-                    max="365"
-                    step="1"
-                    :disabled="isNavSettingsSaving"
-                    aria-label="Частота обновления парсера в днях"
-                    @change="saveNavParserSettings"
-                  />
-                  <span>дней</span>
-                </span>
-              </label>
+              <span class="parser-settings__schedule">
+                <span>Автозапуск каждые <strong>{{ navParserIntervalDays }}</strong> дн.</span>
+                <small>{{ navParserNextRunLabel() }}</small>
+              </span>
+              <button class="parser-settings__toggle" type="button" :aria-expanded="isNavParserSettingsOpen" @click="isNavParserSettingsOpen = !isNavParserSettingsOpen">
+                Настройки
+                <ChevronDown :class="{ 'is-open': isNavParserSettingsOpen }" :size="17" :stroke-width="1.8" aria-hidden="true" />
+              </button>
               <button class="import-button parser-settings__button" type="button" :disabled="isNavParsing" @click="runNavParser">
                 {{ isNavParsing ? 'Парсинг выполняется…' : 'Запустить парсер' }}
               </button>
             </div>
           </div>
+          <Transition name="parser-options">
+            <div v-if="isNavParserSettingsOpen" class="parser-options">
+              <div class="parser-options__heading">
+                <div>
+                  <strong>Расширенные настройки</strong>
+                  <span>Параметры применяются при следующем ручном или автоматическом запуске.</span>
+                </div>
+                <button class="parser-options__save" type="button" :disabled="isNavSettingsSaving" @click="saveNavParserSettings">
+                  {{ isNavSettingsSaving ? 'Сохранение…' : 'Сохранить настройки' }}
+                </button>
+              </div>
+              <div class="parser-options__grid">
+                <label>
+                  <span>Период обновления</span>
+                  <small>Через сколько дней парсер сам запустится снова. Для ежедневного обновления оставьте 1.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserIntervalDays" type="number" min="1" max="365" /><em>дней</em></span>
+                </label>
+                <label>
+                  <span>Параллельные запросы</span>
+                  <small>Сколько страниц nav.tn.ru загружать одновременно. Рекомендуемое значение — 4.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserWorkerCount" type="number" min="1" max="10" /><em>шт.</em></span>
+                </label>
+                <label>
+                  <span>Тайм-аут запроса</span>
+                  <small>Сколько ждать ответа сайта, прежде чем считать запрос неудачным. Рекомендуется 35 секунд.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserRequestTimeout" type="number" min="5" max="120" /><em>сек.</em></span>
+                </label>
+                <label>
+                  <span>Количество попыток</span>
+                  <small>Сколько раз повторить запрос, если сайт временно не ответил. Безопасное значение — 3.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserRetryAttempts" type="number" min="1" max="5" /><em>раз</em></span>
+                </label>
+                <label>
+                  <span>Задержка между попытками</span>
+                  <small>Пауза перед повторным запросом. После каждой следующей ошибки она автоматически увеличивается.</small>
+                  <span class="parser-options__input"><input v-model.number="navParserRetryDelay" type="number" min="1" max="30" /><em>сек.</em></span>
+                </label>
+                <label class="parser-options__switch">
+                  <span>
+                    <strong>Резервный поиск</strong>
+                    <small>Если система не найдена в общем каталоге, искать её отдельно через поиск nav.tn.ru. Лучше оставить включённым.</small>
+                  </span>
+                  <input v-model="navParserFallbackSearch" type="checkbox" />
+                </label>
+              </div>
+            </div>
+          </Transition>
           <p v-if="navSettingsError" class="table-message table-message--error">{{ navSettingsError }}</p>
           <p v-else-if="navSettingsMessage" class="table-message table-message--success">{{ navSettingsMessage }}</p>
           <p v-if="navParseError" class="table-message table-message--error">{{ navParseError }}</p>
@@ -3387,6 +3470,12 @@ onBeforeUnmount(() => {
             <summary>Не найденные на nav.tn.ru системы ({{ navParseNotFound.length }})</summary>
             <ul>
               <li v-for="systemName in navParseNotFound" :key="systemName">{{ systemName }}</li>
+            </ul>
+          </details>
+          <details v-if="navParseFailedSystems.length" class="parser-settings__not-found parser-settings__failed">
+            <summary>Ошибки загрузки систем ({{ navParseFailedSystems.length }})</summary>
+            <ul>
+              <li v-for="systemName in navParseFailedSystems" :key="systemName">{{ systemName }}</li>
             </ul>
           </details>
         </section>

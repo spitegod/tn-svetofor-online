@@ -23,9 +23,10 @@ import (
 const navBaseURL = "https://nav.tn.ru"
 
 type NavParserService struct {
-	repo    *repository.SystemCatalogRepository
-	client  *http.Client
-	parseMu sync.Mutex
+	repo           *repository.SystemCatalogRepository
+	client         *http.Client
+	parseMu        sync.Mutex
+	activeSettings model.NavParserSettings
 }
 
 type navSystemLink struct {
@@ -48,18 +49,27 @@ func NewNavParserService(repo *repository.SystemCatalogRepository) *NavParserSer
 	return &NavParserService{
 		repo:   repo,
 		client: &http.Client{Timeout: 35 * time.Second},
+		activeSettings: model.NavParserSettings{
+			WorkerCount: 4, RequestTimeoutSecs: 35, RetryAttempts: 3, RetryDelaySecs: 2, FallbackSearch: true,
+		},
 	}
 }
 
 func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, error) {
 	s.parseMu.Lock()
 	defer s.parseMu.Unlock()
+	settings, err := s.Settings(ctx)
+	if err != nil {
+		return model.NavParseReport{}, err
+	}
+	s.activeSettings = settings
+	s.client.Timeout = time.Duration(settings.RequestTimeoutSecs) * time.Second
 
 	rows, err := s.repo.ParserRows(ctx)
 	if err != nil {
 		return model.NavParseReport{}, err
 	}
-	report := model.NavParseReport{Total: len(rows), NotFound: make([]string, 0)}
+	report := model.NavParseReport{Total: len(rows), NotFound: make([]string, 0), FailedSystems: make([]string, 0)}
 	if len(rows) == 0 {
 		return report, s.repo.MarkNavParserRun(ctx)
 	}
@@ -83,6 +93,12 @@ func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, err
 	jobs := make([]parseJob, 0, len(rows))
 	for _, row := range rows {
 		link, ok := linksByName[normalizeSystemName(row.SystemName)]
+		if !ok && settings.FallbackSearch {
+			link, ok = s.searchSystem(ctx, row.SystemName)
+			if ok {
+				report.FallbackFound++
+			}
+		}
 		if !ok {
 			report.NotFound = append(report.NotFound, row.SystemName)
 			continue
@@ -94,7 +110,7 @@ func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, err
 	jobCh := make(chan parseJob)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	workerCount := 4
+	workerCount := settings.WorkerCount
 	if len(jobs) < workerCount {
 		workerCount = len(jobs)
 	}
@@ -118,6 +134,7 @@ func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, err
 				mu.Lock()
 				if err != nil {
 					report.Failed++
+					report.FailedSystems = append(report.FailedSystems, job.row.SystemName)
 				} else {
 					report.Updated++
 				}
@@ -137,8 +154,11 @@ func (s *NavParserService) Parse(ctx context.Context) (model.NavParseReport, err
 	close(jobCh)
 	wg.Wait()
 	sort.Strings(report.NotFound)
-	if err := s.repo.MarkNavParserRun(ctx); err != nil {
-		return report, err
+	sort.Strings(report.FailedSystems)
+	if report.Failed == 0 {
+		if err := s.repo.MarkNavParserRun(ctx); err != nil {
+			return report, err
+		}
 	}
 
 	return report, nil
@@ -152,15 +172,67 @@ func (s *NavParserService) Settings(ctx context.Context) (model.NavParserSetting
 	return withNextNavRun(settings), nil
 }
 
-func (s *NavParserService) UpdateInterval(ctx context.Context, days int) (model.NavParserSettings, error) {
-	if days < 1 || days > 365 {
+func (s *NavParserService) UpdateSettings(ctx context.Context, input model.NavParserSettings) (model.NavParserSettings, error) {
+	if input.UpdateIntervalDays < 1 || input.UpdateIntervalDays > 365 {
 		return model.NavParserSettings{}, fmt.Errorf("update interval must be between 1 and 365 days")
 	}
-	settings, err := s.repo.UpdateNavParserInterval(ctx, days)
+	if input.WorkerCount < 1 || input.WorkerCount > 10 {
+		return model.NavParserSettings{}, fmt.Errorf("worker count must be between 1 and 10")
+	}
+	if input.RequestTimeoutSecs < 5 || input.RequestTimeoutSecs > 120 {
+		return model.NavParserSettings{}, fmt.Errorf("request timeout must be between 5 and 120 seconds")
+	}
+	if input.RetryAttempts < 1 || input.RetryAttempts > 5 {
+		return model.NavParserSettings{}, fmt.Errorf("retry attempts must be between 1 and 5")
+	}
+	if input.RetryDelaySecs < 1 || input.RetryDelaySecs > 30 {
+		return model.NavParserSettings{}, fmt.Errorf("retry delay must be between 1 and 30 seconds")
+	}
+	settings, err := s.repo.UpdateNavParserSettings(ctx, input)
 	if err != nil {
 		return model.NavParserSettings{}, err
 	}
 	return withNextNavRun(settings), nil
+}
+
+func (s *NavParserService) searchSystem(ctx context.Context, systemName string) (navSystemLink, bool) {
+	document, err := s.fetchDocument(ctx, navBaseURL+"/search/?q="+url.QueryEscape(systemName))
+	if err != nil {
+		return navSystemLink{}, false
+	}
+	types, _ := s.repo.SystemTypes(ctx)
+	return systemLinkFromSearch(document, systemName, types)
+}
+
+func systemLinkFromSearch(document *html.Node, systemName string, types []model.SystemTypeOption) (navSystemLink, bool) {
+	wantedName := normalizeSystemName(systemName)
+	for _, anchor := range findNodes(document, func(node *html.Node) bool {
+		return node.Type == html.ElementNode && node.Data == "a" && hasClass(node, "b-search-teaser__title")
+	}) {
+		if normalizeSystemName(nodeText(anchor)) != wantedName {
+			continue
+		}
+		parsed, err := url.Parse(attribute(anchor, "href"))
+		if err != nil {
+			continue
+		}
+		absolute := (&url.URL{Scheme: "https", Host: "nav.tn.ru"}).ResolveReference(parsed)
+		parts := pathParts(absolute.Path)
+		if absolute.Hostname() != "nav.tn.ru" || len(parts) != 3 || parts[0] != "systems" {
+			continue
+		}
+		systemType := ""
+		for _, item := range types {
+			if item.Slug == parts[1] {
+				systemType = item.Name
+				break
+			}
+		}
+		absolute.RawQuery = ""
+		absolute.Fragment = ""
+		return navSystemLink{Name: systemName, URL: absolute.String(), SystemType: systemType}, true
+	}
+	return navSystemLink{}, false
 }
 
 func (s *NavParserService) RunScheduler(ctx context.Context) {
@@ -217,7 +289,7 @@ func (s *NavParserService) crawlCatalog(ctx context.Context) ([]navSystemLink, e
 	}
 	categoryCh := make(chan navCategory)
 	resultCh := make(chan categoryResult, len(categories))
-	workerCount := 4
+	workerCount := s.activeSettings.WorkerCount
 	if len(categories) < workerCount {
 		workerCount = len(categories)
 	}
@@ -360,21 +432,45 @@ func (s *NavParserService) scrapeCharacteristics(ctx context.Context, systemURL 
 }
 
 func (s *NavParserService) fetchDocument(ctx context.Context, address string) (*html.Node, error) {
+	attempts := max(1, s.activeSettings.RetryAttempts)
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		document, retry, err := s.fetchDocumentOnce(ctx, address)
+		if err == nil {
+			return document, nil
+		}
+		lastErr = err
+		if !retry || attempt == attempts {
+			break
+		}
+		delay := time.Duration(max(1, s.activeSettings.RetryDelaySecs)*attempt) * time.Second
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+func (s *NavParserService) fetchDocumentOnce(ctx context.Context, address string) (*html.Node, bool, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	request.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TNSvetofor/1.0; +https://nav.tn.ru/)")
 	request.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
 	response, err := s.client.Do(request)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected HTTP status %s", response.Status)
+		retry := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError
+		return nil, retry, fmt.Errorf("unexpected HTTP status %s", response.Status)
 	}
-	return html.Parse(io.LimitReader(response.Body, 12<<20))
+	document, err := html.Parse(io.LimitReader(response.Body, 12<<20))
+	return document, false, err
 }
 
 func (s *NavParserService) fetchImage(ctx context.Context, address string) (string, []byte, error) {
@@ -512,7 +608,7 @@ func collectPageCount(document *html.Node) int {
 }
 
 func normalizeSystemName(value string) string {
-	value = strings.ToLower(strings.ReplaceAll(normalizeText(value), "ё", "е"))
+	value = strings.ReplaceAll(strings.ToLower(normalizeText(value)), "ё", "е")
 	return strings.Join(strings.FieldsFunc(value, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	}), " ")

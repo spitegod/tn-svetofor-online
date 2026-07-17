@@ -101,12 +101,24 @@ CREATE INDEX IF NOT EXISTS idx_nav_system_characteristics_name ON nav_system_cha
 
 CREATE TABLE IF NOT EXISTS nav_parser_settings (
 	id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
-	update_interval_days INTEGER NOT NULL DEFAULT 7 CHECK (update_interval_days BETWEEN 1 AND 365),
+	update_interval_days INTEGER NOT NULL DEFAULT 1 CHECK (update_interval_days BETWEEN 1 AND 365),
+	worker_count INTEGER NOT NULL DEFAULT 4 CHECK (worker_count BETWEEN 1 AND 10),
+	request_timeout_seconds INTEGER NOT NULL DEFAULT 35 CHECK (request_timeout_seconds BETWEEN 5 AND 120),
+	retry_attempts INTEGER NOT NULL DEFAULT 3 CHECK (retry_attempts BETWEEN 1 AND 5),
+	retry_delay_seconds INTEGER NOT NULL DEFAULT 2 CHECK (retry_delay_seconds BETWEEN 1 AND 30),
+	fallback_search BOOLEAN NOT NULL DEFAULT TRUE,
 	last_run_at TIMESTAMPTZ
 );
 
+ALTER TABLE nav_parser_settings ADD COLUMN IF NOT EXISTS worker_count INTEGER NOT NULL DEFAULT 4;
+ALTER TABLE nav_parser_settings ADD COLUMN IF NOT EXISTS request_timeout_seconds INTEGER NOT NULL DEFAULT 35;
+ALTER TABLE nav_parser_settings ADD COLUMN IF NOT EXISTS retry_attempts INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE nav_parser_settings ADD COLUMN IF NOT EXISTS retry_delay_seconds INTEGER NOT NULL DEFAULT 2;
+ALTER TABLE nav_parser_settings ADD COLUMN IF NOT EXISTS fallback_search BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE nav_parser_settings ALTER COLUMN update_interval_days SET DEFAULT 1;
+
 INSERT INTO nav_parser_settings (id, update_interval_days)
-VALUES (TRUE, 7)
+VALUES (TRUE, 1)
 ON CONFLICT (id) DO NOTHING;
 `
 

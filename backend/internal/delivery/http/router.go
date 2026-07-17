@@ -289,14 +289,12 @@ func (r *Router) navParserSettings(w http.ResponseWriter, request *http.Request)
 }
 
 func (r *Router) updateNavParserSettings(w http.ResponseWriter, request *http.Request) {
-	var payload struct {
-		UpdateIntervalDays int `json:"updateIntervalDays"`
-	}
+	var payload model.NavParserSettings
 	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid nav parser settings"))
 		return
 	}
-	settings, err := r.navParser.UpdateInterval(request.Context(), payload.UpdateIntervalDays)
+	settings, err := r.navParser.UpdateSettings(request.Context(), payload)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

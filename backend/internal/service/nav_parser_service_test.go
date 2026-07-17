@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"tn/backend/internal/model"
+
 	"golang.org/x/net/html"
 )
 
@@ -24,6 +26,52 @@ func TestCollectCategoryURLsIncludesImage(t *testing.T) {
 	}
 	if categories[0].ImageURL != "https://nav.tn.ru/cloud/roof.webp" {
 		t.Fatalf("unexpected image URL %q", categories[0].ImageURL)
+	}
+}
+
+func TestNormalizeSystemNameIgnoresCaseSpacingAndPunctuation(t *testing.T) {
+	left := normalizeSystemName("  ТН-КРОВЛЯ   Ёлка  ")
+	right := normalizeSystemName("тн кровля елка")
+	if left != right {
+		t.Fatalf("expected normalized names to match: %q != %q", left, right)
+	}
+}
+
+func TestSystemLinkFromSearchUsesExactNormalizedNameAndSystemType(t *testing.T) {
+	document, err := html.Parse(strings.NewReader(`
+		<div class="b-search-teaser">
+			<a class="b-search-teaser__title" href="/systems/ploskaya-krysha/tn-krovlya-test/?from=search">
+				ТН-КРОВЛЯ  Тест
+			</a>
+		</div>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	link, ok := systemLinkFromSearch(document, "тн кровля тест", []model.SystemTypeOption{{
+		Slug: "ploskaya-krysha", Name: "Плоская крыша",
+	}})
+	if !ok {
+		t.Fatal("expected fallback search result")
+	}
+	if link.URL != "https://nav.tn.ru/systems/ploskaya-krysha/tn-krovlya-test/" {
+		t.Fatalf("unexpected URL %q", link.URL)
+	}
+	if link.SystemType != "Плоская крыша" {
+		t.Fatalf("unexpected system type %q", link.SystemType)
+	}
+}
+
+func TestSystemLinkFromSearchRejectsSimilarName(t *testing.T) {
+	document, err := html.Parse(strings.NewReader(`
+		<a class="b-search-teaser__title" href="/systems/ploskaya-krysha/tn-krovlya-test-plus/">
+			ТН-КРОВЛЯ Тест Плюс
+		</a>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := systemLinkFromSearch(document, "ТН-КРОВЛЯ Тест", nil); ok {
+		t.Fatal("expected a similar but non-exact name to be rejected")
 	}
 }
 
