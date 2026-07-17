@@ -105,6 +105,32 @@ CREATE TABLE IF NOT EXISTS nav_parser_settings (
 	last_run_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS nav_parser_runs (
+	id BIGSERIAL PRIMARY KEY,
+	source TEXT NOT NULL DEFAULT 'manual',
+	status TEXT NOT NULL,
+	message TEXT NOT NULL DEFAULT '',
+	total INTEGER NOT NULL DEFAULT 0,
+	found INTEGER NOT NULL DEFAULT 0,
+	updated INTEGER NOT NULL DEFAULT 0,
+	failed INTEGER NOT NULL DEFAULT 0,
+	not_found INTEGER NOT NULL DEFAULT 0,
+	started_at TIMESTAMPTZ NOT NULL,
+	finished_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_nav_parser_runs_started_at ON nav_parser_runs(started_at DESC);
+
+CREATE TABLE IF NOT EXISTS nav_parser_run_logs (
+	id BIGSERIAL PRIMARY KEY,
+	run_id BIGINT NOT NULL REFERENCES nav_parser_runs(id) ON DELETE CASCADE,
+	logged_at TIMESTAMPTZ NOT NULL,
+	level TEXT NOT NULL,
+	message TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_nav_parser_run_logs_run_id ON nav_parser_run_logs(run_id, id);
+
 INSERT INTO nav_parser_settings (id, update_interval_days)
 VALUES (TRUE, 7)
 ON CONFLICT (id) DO NOTHING;

@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -40,6 +41,8 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("POST /api/system-catalog/import", router.importSystemCatalog)
 	mux.HandleFunc("GET /api/system-catalog/export", router.exportSystemCatalog)
 	mux.HandleFunc("POST /api/system-catalog/parse-nav", router.parseNavSystemCatalog)
+	mux.HandleFunc("GET /api/nav-parser/status", router.navParserStatus)
+	mux.HandleFunc("GET /api/nav-parser/runs", router.navParserRuns)
 	mux.HandleFunc("GET /api/nav-system-types/{slug}/image", router.navSystemTypeImage)
 	mux.HandleFunc("GET /api/nav-parser/settings", router.navParserSettings)
 	mux.HandleFunc("PATCH /api/nav-parser/settings", router.updateNavParserSettings)
@@ -258,11 +261,37 @@ func (r *Router) updateSystemDocumentComparisonBulk(w http.ResponseWriter, reque
 func (r *Router) parseNavSystemCatalog(w http.ResponseWriter, request *http.Request) {
 	report, err := r.navParser.Parse(request.Context())
 	if err != nil {
+		if errors.Is(err, service.ErrNavParserRunning) {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (r *Router) navParserStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, r.navParser.Status())
+}
+
+func (r *Router) navParserRuns(w http.ResponseWriter, request *http.Request) {
+	limit := 20
+	if rawLimit := request.URL.Query().Get("limit"); rawLimit != "" {
+		parsedLimit, err := strconv.Atoi(rawLimit)
+		if err != nil || parsedLimit < 1 || parsedLimit > 100 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("limit must be between 1 and 100"))
+			return
+		}
+		limit = parsedLimit
+	}
+	runs, err := r.navParser.Runs(request.Context(), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, runs)
 }
 
 func (r *Router) navSystemTypeImage(w http.ResponseWriter, request *http.Request) {

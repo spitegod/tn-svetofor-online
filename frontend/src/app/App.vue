@@ -102,6 +102,44 @@ type NavParserSettings = {
   nextRunAt: string | null
 }
 
+type NavParserLogEntry = {
+  time: string
+  level: 'info' | 'success' | 'warning' | 'error'
+  message: string
+}
+
+type NavParserProgress = {
+  running: boolean
+  source: 'manual' | 'scheduled' | string
+  stage: string
+  message: string
+  percent: number
+  processed: number
+  total: number
+  found: number
+  updated: number
+  failed: number
+  notFound: number
+  startedAt: string | null
+  finishedAt: string | null
+  logs: NavParserLogEntry[]
+}
+
+type NavParserRun = {
+  id: number
+  source: 'manual' | 'scheduled' | string
+  status: 'completed' | 'failed' | string
+  message: string
+  total: number
+  found: number
+  updated: number
+  failed: number
+  notFound: number
+  startedAt: string
+  finishedAt: string
+  logs: NavParserLogEntry[]
+}
+
 type SystemCatalogStats = {
   total: number
   recommended: number
@@ -406,9 +444,31 @@ const navParseMessage = ref('')
 const navParseError = ref('')
 const navParseNotFound = ref<string[]>([])
 const navParserIntervalDays = ref(7)
+const navParserProgress = ref<NavParserProgress>({
+  running: false,
+  source: 'manual',
+  stage: 'Ожидание',
+  message: 'Парсер готов к запуску',
+  percent: 0,
+  processed: 0,
+  total: 0,
+  found: 0,
+  updated: 0,
+  failed: 0,
+  notFound: 0,
+  startedAt: null,
+  finishedAt: null,
+  logs: [],
+})
+const navParserLogsNewestFirst = computed(() => [...navParserProgress.value.logs].reverse())
+const navParserRuns = ref<NavParserRun[]>([])
+const isNavParserLogOpen = ref(false)
+const openedNavParserRunId = ref<number | null>(null)
 const isNavSettingsSaving = ref(false)
 const navSettingsMessage = ref('')
 const navSettingsError = ref('')
+let navParserPollTimer: ReturnType<typeof window.setInterval> | null = null
+let navParserRequestPending = false
 
 function selectedOrderName() {
   return orders.value.find((order) => order.id === selectedOrderId.value)?.name ?? 'Распоряжение не выбрано'
@@ -1301,14 +1361,21 @@ async function runNavParser() {
     return
   }
 
+  navParserRequestPending = true
   isNavParsing.value = true
   navParseMessage.value = ''
   navParseError.value = ''
   navParseNotFound.value = []
+  isNavParserLogOpen.value = true
+  startNavParserPolling()
   try {
     const response = await fetch(`${API_BASE_URL}/system-catalog/parse-nav`, { method: 'POST' })
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
+      if (response.status === 409) {
+        await loadNavParserProgress()
+        return
+      }
       throw new Error(payload?.error ?? 'Не удалось выполнить парсинг nav.tn.ru')
     }
 
@@ -1320,8 +1387,109 @@ async function runNavParser() {
   } catch (error) {
     navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
   } finally {
-    isNavParsing.value = false
+    navParserRequestPending = false
+    await Promise.all([loadNavParserProgress(), loadNavParserRuns()])
+    isNavParsing.value = navParserProgress.value.running
+    if (!navParserProgress.value.running) {
+      stopNavParserPolling()
+    }
   }
+}
+
+async function loadNavParserProgress() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/nav-parser/status`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить прогресс парсера')
+    }
+    const progress: NavParserProgress = await response.json()
+    navParserProgress.value = { ...progress, logs: progress.logs ?? [] }
+    if (navParserProgress.value.running) {
+      isNavParserLogOpen.value = true
+    }
+    isNavParsing.value = navParserProgress.value.running || navParserRequestPending
+    if (navParserProgress.value.running && !navParserPollTimer) {
+      startNavParserPolling()
+    }
+  } catch (error) {
+    if (navParserRequestPending) {
+      navParseError.value = error instanceof Error ? error.message : 'Не удалось загрузить прогресс парсера'
+    }
+  }
+}
+
+async function loadNavParserRuns() {
+  try {
+    const response = await fetch(`${API_BASE_URL}/nav-parser/runs?limit=50`)
+    if (!response.ok) {
+      throw new Error('Не удалось загрузить историю запусков')
+    }
+    const runs: NavParserRun[] | null = await response.json()
+    navParserRuns.value = (runs ?? []).map((run) => ({ ...run, logs: run.logs ?? [] }))
+  } catch (error) {
+    navSettingsError.value = error instanceof Error ? error.message : 'Не удалось загрузить историю запусков'
+  }
+}
+
+function startNavParserPolling() {
+  if (navParserPollTimer) {
+    return
+  }
+  void loadNavParserProgress()
+  navParserPollTimer = window.setInterval(() => {
+    void loadNavParserProgress().then(() => {
+      if (!navParserProgress.value.running && !navParserRequestPending) {
+        stopNavParserPolling()
+      }
+    })
+  }, 750)
+}
+
+function stopNavParserPolling() {
+  if (!navParserPollTimer) {
+    return
+  }
+  window.clearInterval(navParserPollTimer)
+  navParserPollTimer = null
+}
+
+function formatNavParserLogTime(value: string) {
+  if (!value) {
+    return '—'
+  }
+  return new Intl.DateTimeFormat('ru-RU', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(value))
+}
+
+function formatNavParserRunDate(value: string) {
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
+function formatNavParserRunDuration(run: NavParserRun) {
+  const seconds = Math.max(0, Math.round((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000))
+  if (seconds < 60) {
+    return `${seconds} сек.`
+  }
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  return remainder ? `${minutes} мин. ${remainder} сек.` : `${minutes} мин.`
+}
+
+function navParserSourceLabel(source: string) {
+  return source === 'scheduled' ? 'По расписанию' : 'Ручной запуск'
+}
+
+function navParserRunLogsNewestFirst(run: NavParserRun) {
+  return [...run.logs].reverse()
 }
 
 async function loadNavParserSettings() {
@@ -1486,7 +1654,7 @@ function setPage(page: string) {
   } else if (page === 'classification') {
     void loadClassificationCatalog()
   } else if (page === 'settings') {
-    void Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadDocumentTable(), loadNavParserSettings()])
+    void Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadDocumentTable(), loadNavParserSettings(), loadNavParserProgress(), loadNavParserRuns()])
   }
 }
 
@@ -2121,7 +2289,7 @@ onMounted(async () => {
   window.addEventListener('resize', updateClassificationCardColumns)
   window.addEventListener('scroll', updateScrollTopVisibility, { passive: true })
   await loadOrders()
-  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings()])
+  await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings(), loadNavParserProgress(), loadNavParserRuns()])
 })
 
 onBeforeUnmount(() => {
@@ -2133,6 +2301,7 @@ onBeforeUnmount(() => {
   if (classificationSearchTimer) {
     window.clearTimeout(classificationSearchTimer)
   }
+  stopNavParserPolling()
   documentCommentTimers.forEach((timer) => window.clearTimeout(timer))
   classificationEditTimers.forEach((timer) => window.clearTimeout(timer))
   systemCatalogEditTimers.forEach((timer) => window.clearTimeout(timer))
@@ -3379,6 +3548,108 @@ onBeforeUnmount(() => {
               </button>
             </div>
           </div>
+          <section v-if="navParserProgress.running || navParserProgress.logs.length" class="parser-progress" aria-live="polite">
+            <header class="parser-progress__header">
+              <div>
+                <span class="parser-progress__state" :class="{ 'is-running': navParserProgress.running }">
+                  <RefreshCw v-if="navParserProgress.running" :size="15" :stroke-width="2" aria-hidden="true" />
+                  <CircleCheck v-else-if="navParserProgress.percent === 100" :size="15" :stroke-width="2" aria-hidden="true" />
+                  <Info v-else :size="15" :stroke-width="2" aria-hidden="true" />
+                  {{ navParserProgress.stage }}
+                </span>
+                <strong>{{ navParserProgress.message }}</strong>
+              </div>
+              <b>{{ navParserProgress.percent }}%</b>
+            </header>
+            <div
+              class="parser-progress__track"
+              role="progressbar"
+              :aria-valuenow="navParserProgress.percent"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              :aria-label="`Прогресс парсера: ${navParserProgress.percent}%`"
+            >
+              <span :style="{ width: `${navParserProgress.percent}%` }" />
+            </div>
+            <div class="parser-progress__stats">
+              <span><small>Обработано</small><strong>{{ navParserProgress.processed }} / {{ navParserProgress.total }}</strong></span>
+              <span><small>Найдено</small><strong>{{ navParserProgress.found }}</strong></span>
+              <span><small>Обновлено</small><strong>{{ navParserProgress.updated }}</strong></span>
+              <span><small>Не найдено</small><strong>{{ navParserProgress.notFound }}</strong></span>
+              <span><small>Ошибки</small><strong>{{ navParserProgress.failed }}</strong></span>
+            </div>
+            <section class="parser-log">
+              <button
+                class="parser-log__toggle"
+                type="button"
+                :aria-expanded="isNavParserLogOpen"
+                @click="isNavParserLogOpen = !isNavParserLogOpen"
+              >
+                <span>Журнал выполнения</span>
+                <span class="parser-log__toggle-meta">
+                  <small>{{ navParserProgress.logs.length }} записей</small>
+                  <ChevronDown :size="16" :stroke-width="2" :class="{ 'is-open': isNavParserLogOpen }" aria-hidden="true" />
+                </span>
+              </button>
+              <Transition name="parser-log-body">
+                <div v-if="isNavParserLogOpen" class="parser-log__body">
+                  <div class="parser-log__entries">
+                    <p v-for="(entry, index) in navParserLogsNewestFirst" :key="`${entry.time}-${index}`" :class="`parser-log__entry parser-log__entry--${entry.level}`">
+                      <time>{{ formatNavParserLogTime(entry.time) }}</time>
+                      <i aria-hidden="true" />
+                      <span>{{ entry.message }}</span>
+                    </p>
+                  </div>
+                </div>
+              </Transition>
+            </section>
+          </section>
+          <section class="parser-history" aria-labelledby="parser-history-title">
+            <header class="parser-history__header">
+              <div>
+                <h2 id="parser-history-title">Журнал всех запусков</h2>
+                <p>Ручные и автоматические запуски парсера</p>
+              </div>
+              <span>{{ navParserRuns.length }} запусков</span>
+            </header>
+            <p v-if="!navParserRuns.length" class="parser-history__empty">Завершённых запусков пока нет.</p>
+            <div v-else class="parser-history__list">
+              <article v-for="run in navParserRuns" :key="run.id" class="parser-history__run" :class="`is-${run.status}`">
+                <button
+                  class="parser-history__run-toggle"
+                  type="button"
+                  :aria-expanded="openedNavParserRunId === run.id"
+                  @click="openedNavParserRunId = openedNavParserRunId === run.id ? null : run.id"
+                >
+                  <span class="parser-history__status" aria-hidden="true">
+                    <CircleCheck v-if="run.status === 'completed'" :size="17" :stroke-width="2" />
+                    <TriangleAlert v-else :size="17" :stroke-width="2" />
+                  </span>
+                  <span class="parser-history__identity">
+                    <strong>{{ formatNavParserRunDate(run.startedAt) }}</strong>
+                    <small>{{ navParserSourceLabel(run.source) }} · {{ formatNavParserRunDuration(run) }}</small>
+                  </span>
+                  <span class="parser-history__summary">
+                    <span>Обновлено <b>{{ run.updated }}</b></span>
+                    <span>Не найдено <b>{{ run.notFound }}</b></span>
+                    <span>Ошибки <b>{{ run.failed }}</b></span>
+                  </span>
+                  <ChevronDown :size="18" :stroke-width="2" :class="{ 'is-open': openedNavParserRunId === run.id }" aria-hidden="true" />
+                </button>
+                <Transition name="parser-log-body">
+                  <div v-if="openedNavParserRunId === run.id" class="parser-log__body parser-history__log-body">
+                    <div class="parser-log__entries">
+                      <p v-for="(entry, index) in navParserRunLogsNewestFirst(run)" :key="`${run.id}-${entry.time}-${index}`" :class="`parser-log__entry parser-log__entry--${entry.level}`">
+                        <time>{{ formatNavParserLogTime(entry.time) }}</time>
+                        <i aria-hidden="true" />
+                        <span>{{ entry.message }}</span>
+                      </p>
+                    </div>
+                  </div>
+                </Transition>
+              </article>
+            </div>
+          </section>
           <p v-if="navSettingsError" class="table-message table-message--error">{{ navSettingsError }}</p>
           <p v-else-if="navSettingsMessage" class="table-message table-message--success">{{ navSettingsMessage }}</p>
           <p v-if="navParseError" class="table-message table-message--error">{{ navParseError }}</p>

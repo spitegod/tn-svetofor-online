@@ -43,6 +43,44 @@ type NavParseReport struct {
 	NotFound []string `json:"notFound"`
 }
 
+type NavParserLogEntry struct {
+	Time    time.Time `json:"time"`
+	Level   string    `json:"level"`
+	Message string    `json:"message"`
+}
+
+type NavParserProgress struct {
+	Running    bool                `json:"running"`
+	Source     string              `json:"source"`
+	Stage      string              `json:"stage"`
+	Message    string              `json:"message"`
+	Percent    int                 `json:"percent"`
+	Processed  int                 `json:"processed"`
+	Total      int                 `json:"total"`
+	Found      int                 `json:"found"`
+	Updated    int                 `json:"updated"`
+	Failed     int                 `json:"failed"`
+	NotFound   int                 `json:"notFound"`
+	StartedAt  *time.Time          `json:"startedAt"`
+	FinishedAt *time.Time          `json:"finishedAt"`
+	Logs       []NavParserLogEntry `json:"logs"`
+}
+
+type NavParserRun struct {
+	ID         int64               `json:"id"`
+	Source     string              `json:"source"`
+	Status     string              `json:"status"`
+	Message    string              `json:"message"`
+	Total      int                 `json:"total"`
+	Found      int                 `json:"found"`
+	Updated    int                 `json:"updated"`
+	Failed     int                 `json:"failed"`
+	NotFound   int                 `json:"notFound"`
+	StartedAt  time.Time           `json:"startedAt"`
+	FinishedAt time.Time           `json:"finishedAt"`
+	Logs       []NavParserLogEntry `json:"logs"`
+}
+
 type NavParserSettings struct {
 	UpdateIntervalDays int        `json:"updateIntervalDays"`
 	LastRunAt          *time.Time `json:"lastRunAt"`
