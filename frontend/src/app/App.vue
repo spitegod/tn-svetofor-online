@@ -2604,92 +2604,106 @@ onBeforeUnmount(() => {
           </article>
         </section>
 
-        <section class="filter-panel" aria-label="Тип строительства">
-          <h2>Тип строительства</h2>
-          <div class="type-tabs type-tabs--changes">
-            <button
-              v-for="type in classificationConstructionTypes"
-              :key="type.name"
-              class="type-tab"
-              :class="{ 'type-tab--active': type.name === selectedConstructionType }"
-              type="button"
-              @click="selectConstructionType(type.name)"
-            >
-              <span>{{ type.name }}</span>
-              <strong>{{ type.count }}</strong>
-            </button>
-          </div>
-        </section>
-
         <section
-          class="table-toolbar"
+          class="changes-filters"
           :class="afterFilterAccentModifier() && `changes-filter-accent--${afterFilterAccentModifier()}`"
           :style="{ '--before-accent': statusAccentColor(selectedBeforeFilter), '--after-accent': statusAccentColor(selectedAfterFilter) }"
-          aria-label="Управление таблицей"
+          aria-label="Фильтры изменений"
         >
-          <div class="select-field">
-            <span>Было</span>
-            <div class="custom-select" :class="{ 'is-open': openedSelect === 'before', 'is-filtered': selectedBeforeFilter !== 'Все' }">
-              <button class="custom-select__button" type="button" @click.stop="toggleSelect('before')">
-                <span>{{ selectedBeforeFilter }}</span>
-                <i aria-hidden="true" />
+          <header class="changes-filters__header">
+            <div class="changes-filters__heading">
+              <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
+              <div>
+                <h2>Фильтры</h2>
+              </div>
+            </div>
+          </header>
+
+          <div class="changes-filters__group changes-filters__construction">
+            <h3>Тип строительства</h3>
+            <div class="type-tabs type-tabs--changes">
+              <button
+                v-for="type in classificationConstructionTypes"
+                :key="type.name"
+                class="type-tab"
+                :class="{ 'type-tab--active': type.name === selectedConstructionType }"
+                type="button"
+                @click="selectConstructionType(type.name)"
+              >
+                <span>{{ type.name }}</span>
+                <strong>{{ type.count }}</strong>
               </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'before'" class="custom-select__menu">
-                  <button
-                    v-for="option in beforeOptions"
-                    :key="option"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': option === selectedBeforeFilter }"
-                    type="button"
-                    @click="selectBeforeChangeFilter(option)"
-                  >
-                    {{ option }}
-                  </button>
-                </div>
-              </Transition>
             </div>
           </div>
-          <div class="select-field">
-            <span>Стало</span>
-            <div class="custom-select" :class="{ 'is-open': openedSelect === 'after', 'is-filtered': selectedAfterFilter !== 'Все' }">
-              <button class="custom-select__button" type="button" @click.stop="toggleSelect('after')">
-                <span>{{ selectedAfterFilter }}</span>
-                <i aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'after'" class="custom-select__menu">
-                  <button
-                    v-for="option in afterOptions"
-                    :key="option"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': option === selectedAfterFilter }"
-                    type="button"
-                    @click="selectAfterChangeFilter(option)"
-                  >
-                    {{ option }}
+
+          <div class="changes-filters__group changes-filters__classes">
+            <h3>Класс системы</h3>
+            <div class="table-toolbar changes-filters__toolbar">
+              <div class="select-field">
+                <span>Было</span>
+                <div class="custom-select" :class="{ 'is-open': openedSelect === 'before', 'is-filtered': selectedBeforeFilter !== 'Все' }">
+                  <button class="custom-select__button" type="button" @click.stop="toggleSelect('before')">
+                    <span>{{ selectedBeforeFilter }}</span>
+                    <i aria-hidden="true" />
                   </button>
+                  <Transition name="select-menu">
+                    <div v-if="openedSelect === 'before'" class="custom-select__menu">
+                      <button
+                        v-for="option in beforeOptions"
+                        :key="option"
+                        class="custom-select__option"
+                        :class="{ 'is-selected': option === selectedBeforeFilter }"
+                        type="button"
+                        @click="selectBeforeChangeFilter(option)"
+                      >
+                        {{ option }}
+                      </button>
+                    </div>
+                  </Transition>
                 </div>
+              </div>
+              <div class="select-field">
+                <span>Стало</span>
+                <div class="custom-select" :class="{ 'is-open': openedSelect === 'after', 'is-filtered': selectedAfterFilter !== 'Все' }">
+                  <button class="custom-select__button" type="button" @click.stop="toggleSelect('after')">
+                    <span>{{ selectedAfterFilter }}</span>
+                    <i aria-hidden="true" />
+                  </button>
+                  <Transition name="select-menu">
+                    <div v-if="openedSelect === 'after'" class="custom-select__menu">
+                      <button
+                        v-for="option in afterOptions"
+                        :key="option"
+                        class="custom-select__option"
+                        :class="{ 'is-selected': option === selectedAfterFilter }"
+                        type="button"
+                        @click="selectAfterChangeFilter(option)"
+                      >
+                        {{ option }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
+              <Transition name="changes-reset">
+                <button
+                  v-if="hasActiveChangeFilters"
+                  class="changes-reset-filters"
+                  type="button"
+                  title="Сбросить фильтры"
+                  aria-label="Сбросить фильтры"
+                  @click="resetChangesFilters"
+                >
+                  <FunnelX :size="19" :stroke-width="1.8" aria-hidden="true" />
+                  <span class="systems-reset-filters__count" aria-hidden="true">{{ activeChangeFilterCount }}</span>
+                </button>
               </Transition>
+              <button class="export-button" type="button" @click="exportClassificationTable">
+                Экспорт
+                <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
+              </button>
             </div>
           </div>
-          <Transition name="changes-reset">
-            <button
-              v-if="hasActiveChangeFilters"
-              class="changes-reset-filters"
-              type="button"
-              title="Сбросить фильтры"
-              aria-label="Сбросить фильтры"
-              @click="resetChangesFilters"
-            >
-              <FunnelX :size="19" :stroke-width="1.8" aria-hidden="true" />
-              <span class="systems-reset-filters__count" aria-hidden="true">{{ activeChangeFilterCount }}</span>
-            </button>
-          </Transition>
-          <button class="export-button" type="button" @click="exportClassificationTable">
-            Экспорт
-            <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
-          </button>
         </section>
 
         <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
