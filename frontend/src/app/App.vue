@@ -385,6 +385,12 @@ const visibleClassificationFilterGroups = computed(() => {
   return classificationFilterGroups.value.filter((name) => name.toLocaleLowerCase('ru-RU').includes(query))
 })
 const selectedClassificationFilterCount = computed(() => Object.keys(selectedClassificationFilters.value).length)
+const activeClassificationPageFilterCount = computed(() => [
+  classificationCatalogSearchInput.value.trim() !== '',
+  selectedConstructionType.value !== 'Все',
+  selectedSystemTypeSlug.value !== '',
+].filter(Boolean).length)
+const hasActiveClassificationPageFilters = computed(() => activeClassificationPageFilterCount.value > 0)
 const classificationSystems = computed(() => {
   const query = classificationCatalogSearch.value.trim().toLocaleLowerCase('ru-RU')
   const selectedFilters = Object.entries(selectedClassificationFilters.value)
@@ -1921,10 +1927,17 @@ function clearClassificationFilters() {
   openedClassificationSystemId.value = null
 }
 
-function removeClassificationFilter(name: string) {
-  const next = { ...selectedClassificationFilters.value }
-  delete next[name]
-  selectedClassificationFilters.value = next
+function resetClassificationPageFilters() {
+  if (classificationSearchTimer) {
+    window.clearTimeout(classificationSearchTimer)
+    classificationSearchTimer = null
+  }
+  classificationCatalogSearchInput.value = ''
+  classificationCatalogSearch.value = ''
+  classificationFilterSearch.value = ''
+  isClassificationSearchPending.value = false
+  selectedConstructionType.value = 'Все'
+  selectedSystemTypeSlug.value = ''
   classificationCatalogPage.value = 1
   openedClassificationSystemId.value = null
 }
@@ -2897,9 +2910,18 @@ onBeforeUnmount(() => {
           </article>
         </section>
 
-        <div class="systems-tools">
-          <section class="filter-panel" aria-label="Тип строительства">
-            <h2>Тип строительства</h2>
+        <section class="changes-filters systems-filters" aria-label="Фильтры списка систем">
+          <header class="changes-filters__header">
+            <div class="changes-filters__heading">
+              <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
+              <div>
+                <h2>Фильтры</h2>
+              </div>
+            </div>
+          </header>
+
+          <div class="changes-filters__group systems-filters__construction">
+            <h3>Тип строительства</h3>
             <div class="type-tabs type-tabs--changes type-tabs--systems">
               <button
                 v-for="type in systemsConstructionTypes"
@@ -2913,47 +2935,49 @@ onBeforeUnmount(() => {
                 <strong>{{ type.count }}</strong>
               </button>
             </div>
-          </section>
-        </div>
+          </div>
 
-        <section class="system-type-panel" :class="{ 'is-open': isSystemTypesOpen }" aria-label="Тип системы">
-          <button
-            class="system-type-toggle"
-            type="button"
-            :aria-expanded="isSystemTypesOpen"
-            @click="isSystemTypesOpen = !isSystemTypesOpen"
-          >
-            <span class="system-type-toggle__title">Тип системы</span>
-            <span class="system-type-toggle__selected">Выбрано: {{ selectedSystemType.name }}</span>
-            <i aria-hidden="true" />
-          </button>
+          <div class="changes-filters__group systems-filters__types">
+            <section class="system-type-panel" :class="{ 'is-open': isSystemTypesOpen }" aria-label="Тип системы">
+              <button
+                class="system-type-toggle"
+                type="button"
+                :aria-expanded="isSystemTypesOpen"
+                @click="isSystemTypesOpen = !isSystemTypesOpen"
+              >
+                <span class="system-type-toggle__title">Тип системы</span>
+                <span class="system-type-toggle__selected">Выбрано: {{ selectedSystemType.name }}</span>
+                <i aria-hidden="true" />
+              </button>
 
-          <Transition name="system-type-body">
-            <div v-if="isSystemTypesOpen" class="system-type-body">
-              <div class="system-type-grid">
-                <button
-                  v-for="type in systemTypes"
-                  :key="type.name"
-                  class="system-type-card"
-                  :class="{ 'is-active': type.name === selectedSystemType.name }"
-                  type="button"
-                  @click="selectSystemType(type)"
-                >
-                  <span class="system-type-card__image" aria-hidden="true">
-                    <Layers3 :size="25" :stroke-width="1.6" />
-                    <img v-if="type.imageUrl" :src="systemTypeImageSource(type)" alt="" loading="lazy" decoding="async" @error="hideBrokenSystemTypeImage" />
-                  </span>
-                  <span class="system-type-card__content">
-                    <strong>{{ type.name }}</strong>
-                    <span>{{ type.count }} систем</span>
-                  </span>
-                </button>
-              </div>
-            </div>
-          </Transition>
-        </section>
+              <Transition name="system-type-body">
+                <div v-if="isSystemTypesOpen" class="system-type-body">
+                  <div class="system-type-grid">
+                    <button
+                      v-for="type in systemTypes"
+                      :key="type.name"
+                      class="system-type-card"
+                      :class="{ 'is-active': type.name === selectedSystemType.name }"
+                      type="button"
+                      @click="selectSystemType(type)"
+                    >
+                      <span class="system-type-card__image" aria-hidden="true">
+                        <Layers3 :size="25" :stroke-width="1.6" />
+                        <img v-if="type.imageUrl" :src="systemTypeImageSource(type)" alt="" loading="lazy" decoding="async" @error="hideBrokenSystemTypeImage" />
+                      </span>
+                      <span class="system-type-card__content">
+                        <strong>{{ type.name }}</strong>
+                        <span>{{ type.count }} систем</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </Transition>
+            </section>
+          </div>
 
-        <section class="table-toolbar systems-table-toolbar" aria-label="Управление таблицей">
+          <div class="changes-filters__group systems-filters__parameters">
+            <section class="table-toolbar systems-table-toolbar" aria-label="Параметры системы">
           <label class="search-field systems-name-search" :class="{ 'is-filtered': systemCatalogSearch.trim() }">
             <span>Поиск системы</span>
             <span class="systems-search-control">
@@ -3026,10 +3050,12 @@ onBeforeUnmount(() => {
             </Transition>
           </span>
 
-          <button class="export-button" type="button" @click="exportSystemCatalog">
-            Экспорт
-            <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
-          </button>
+              <button class="export-button" type="button" @click="exportSystemCatalog">
+                Экспорт
+                <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
+              </button>
+            </section>
+          </div>
         </section>
 
         <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
@@ -3169,7 +3195,7 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activePage === 'classification'" class="classification-page">
-        <div class="classification-topline">
+        <div class="classification-topline classification-topline--compact">
           <div class="select-field">
             <span>Распоряжение</span>
             <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
@@ -3195,20 +3221,6 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <label class="search-field classification-search" :class="{ 'is-pending': isClassificationSearchPending }">
-            <span>Поиск</span>
-            <span class="systems-search-control">
-              <Search :size="18" :stroke-width="1.8" aria-hidden="true" />
-              <input
-                v-model="classificationCatalogSearchInput"
-                type="search"
-                placeholder="Поиск по названию или коду ЕКН"
-                :aria-busy="isClassificationSearchPending"
-                @input="scheduleClassificationCatalogSearch"
-              />
-            </span>
-          </label>
-
           <div class="classification-found">
             <span class="classification-found__icon" aria-hidden="true">
               <Layers3 :size="24" :stroke-width="1.8" />
@@ -3221,58 +3233,102 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <section class="filter-panel classification-construction" aria-label="Тип строительства">
-          <h2>Тип строительства</h2>
-          <div class="type-tabs type-tabs--changes type-tabs--systems">
-            <button
-              v-for="type in classificationCatalogConstructionTypes"
-              :key="type.name"
-              class="type-tab"
-              :class="{ 'type-tab--active': type.name === selectedConstructionType }"
-              type="button"
-              @click="selectConstructionType(type.name)"
-            >
-              <span>{{ type.name }}</span>
-              <strong>{{ type.count }}</strong>
-            </button>
-          </div>
-        </section>
-
-        <section class="system-type-panel classification-system-types" :class="{ 'is-open': isSystemTypesOpen }" aria-label="Тип системы">
-          <button
-            class="system-type-toggle"
-            type="button"
-            :aria-expanded="isSystemTypesOpen"
-            @click="isSystemTypesOpen = !isSystemTypesOpen"
-          >
-            <span class="system-type-toggle__title">Тип системы</span>
-            <span class="system-type-toggle__selected">Выбрано: {{ selectedSystemType.name }}</span>
-            <i aria-hidden="true" />
-          </button>
-
-          <Transition name="system-type-body">
-            <div v-if="isSystemTypesOpen" class="system-type-body">
-              <div class="system-type-grid">
-                <button
-                  v-for="type in systemTypes"
-                  :key="type.name"
-                  class="system-type-card"
-                  :class="{ 'is-active': type.name === selectedSystemType.name }"
-                  type="button"
-                  @click="selectSystemType(type)"
-                >
-                  <span class="system-type-card__image" aria-hidden="true">
-                    <Layers3 :size="25" :stroke-width="1.6" />
-                    <img v-if="type.imageUrl" :src="systemTypeImageSource(type)" alt="" loading="lazy" decoding="async" @error="hideBrokenSystemTypeImage" />
-                  </span>
-                  <span class="system-type-card__content">
-                    <strong>{{ type.name }}</strong>
-                    <span>{{ type.count }} систем</span>
-                  </span>
-                </button>
+        <section class="changes-filters classification-page-filters" aria-label="Основные параметры классификации">
+          <header class="changes-filters__header">
+            <div class="changes-filters__heading">
+              <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
+              <div>
+                <h2>Основные параметры</h2>
               </div>
             </div>
-          </Transition>
+          </header>
+
+          <div class="changes-filters__group">
+            <h3>Тип строительства</h3>
+            <div class="type-tabs type-tabs--changes type-tabs--systems">
+              <button
+                v-for="type in classificationCatalogConstructionTypes"
+                :key="type.name"
+                class="type-tab"
+                :class="{ 'type-tab--active': type.name === selectedConstructionType }"
+                type="button"
+                @click="selectConstructionType(type.name)"
+              >
+                <span>{{ type.name }}</span>
+                <strong>{{ type.count }}</strong>
+              </button>
+            </div>
+          </div>
+
+          <div class="changes-filters__group classification-page-filters__types">
+            <section class="system-type-panel classification-system-types" :class="{ 'is-open': isSystemTypesOpen }" aria-label="Тип системы">
+              <button
+                class="system-type-toggle"
+                type="button"
+                :aria-expanded="isSystemTypesOpen"
+                @click="isSystemTypesOpen = !isSystemTypesOpen"
+              >
+                <span class="system-type-toggle__title">Тип системы</span>
+                <span class="system-type-toggle__selected">Выбрано: {{ selectedSystemType.name }}</span>
+                <i aria-hidden="true" />
+              </button>
+
+              <Transition name="system-type-body">
+                <div v-if="isSystemTypesOpen" class="system-type-body">
+                  <div class="system-type-grid">
+                    <button
+                      v-for="type in systemTypes"
+                      :key="type.name"
+                      class="system-type-card"
+                      :class="{ 'is-active': type.name === selectedSystemType.name }"
+                      type="button"
+                      @click="selectSystemType(type)"
+                    >
+                      <span class="system-type-card__image" aria-hidden="true">
+                        <Layers3 :size="25" :stroke-width="1.6" />
+                        <img v-if="type.imageUrl" :src="systemTypeImageSource(type)" alt="" loading="lazy" decoding="async" @error="hideBrokenSystemTypeImage" />
+                      </span>
+                      <span class="system-type-card__content">
+                        <strong>{{ type.name }}</strong>
+                        <span>{{ type.count }} систем</span>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </Transition>
+            </section>
+          </div>
+
+          <div class="changes-filters__group classification-page-filters__search-row">
+            <label class="search-field classification-search" :class="{ 'is-pending': isClassificationSearchPending, 'is-filtered': classificationCatalogSearchInput.trim() }">
+              <span>Поиск</span>
+              <span class="systems-search-control">
+                <Search :size="18" :stroke-width="1.8" aria-hidden="true" />
+                <input
+                  v-model="classificationCatalogSearchInput"
+                  type="search"
+                  placeholder="Поиск по названию или коду ЕКН"
+                  :aria-busy="isClassificationSearchPending"
+                  @input="scheduleClassificationCatalogSearch"
+                />
+              </span>
+            </label>
+            <span class="systems-reset-slot">
+              <Transition name="changes-reset">
+                <button
+                  v-if="hasActiveClassificationPageFilters"
+                  class="changes-reset-filters systems-reset-filters"
+                  type="button"
+                  title="Сбросить основные параметры"
+                  aria-label="Сбросить основные параметры"
+                  @click="resetClassificationPageFilters"
+                >
+                  <FunnelX :size="19" :stroke-width="1.8" aria-hidden="true" />
+                  <span class="systems-reset-filters__count" aria-hidden="true">{{ activeClassificationPageFilterCount }}</span>
+                </button>
+              </Transition>
+            </span>
+          </div>
         </section>
 
         <div class="classification-layout">
@@ -3435,21 +3491,21 @@ onBeforeUnmount(() => {
             </footer>
           </div>
 
-          <aside class="classification-sidebar" aria-label="Фильтры классификации">
+          <aside class="classification-sidebar" aria-label="Характеристики системы">
             <header class="classification-sidebar__header">
               <div class="classification-sidebar__heading">
                 <span class="classification-sidebar__heading-icon" aria-hidden="true">
                   <ListFilter :size="18" :stroke-width="1.9" />
                 </span>
                 <div>
-                  <strong>Фильтры</strong>
+                  <strong>Характеристики системы</strong>
                   <span>{{ classificationSystems.length }} из {{ classificationBaseSystems.length }} систем</span>
                 </div>
               </div>
               <button
                 type="button"
                 :disabled="selectedClassificationFilterCount === 0"
-                aria-label="Сбросить боковые фильтры"
+                aria-label="Сбросить характеристики системы"
                 @click="clearClassificationFilters"
               >
                 <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
@@ -3474,59 +3530,51 @@ onBeforeUnmount(() => {
                 Свернуть все
               </button>
             </div>
-            <div v-if="selectedClassificationFilterCount" class="classification-sidebar__chips" aria-label="Выбранные фильтры">
-              <button
-                v-for="(value, name) in selectedClassificationFilters"
-                :key="name"
-                type="button"
-                :title="`Убрать фильтр «${name}»`"
-                @click="removeClassificationFilter(name)"
+            <div class="classification-sidebar__body">
+              <p v-if="!isClassificationCatalogLoading && classificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
+                Для выбранного типа нет доступных характеристик.
+              </p>
+              <p v-else-if="!isClassificationCatalogLoading && visibleClassificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
+                Характеристики не найдены.
+              </p>
+              <div
+                v-for="filter in visibleClassificationFilterGroups"
+                :key="filter"
+                class="classification-sidebar__group"
+                :class="{ 'is-open': openedClassificationFilter === filter, 'is-selected': selectedClassificationFilters[filter] }"
               >
-                <span>{{ name }}: <strong>{{ value }}</strong></span>
-                <X :size="13" :stroke-width="2" aria-hidden="true" />
-              </button>
-            </div>
-            <p v-if="!isClassificationCatalogLoading && classificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
-              Для выбранного типа нет доступных характеристик.
-            </p>
-            <p v-else-if="!isClassificationCatalogLoading && visibleClassificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
-              Характеристики не найдены.
-            </p>
-            <div
-              v-for="filter in visibleClassificationFilterGroups"
-              :key="filter"
-              class="classification-sidebar__group"
-              :class="{ 'is-open': openedClassificationFilter === filter, 'is-selected': selectedClassificationFilters[filter] }"
-            >
-              <button
-                class="classification-sidebar__item"
-                type="button"
-                @click="toggleClassificationFilter(filter)"
-              >
-                <span class="classification-sidebar__label">
-                  <strong>{{ filter }}</strong>
-                  <small v-if="selectedClassificationFilters[filter]">{{ selectedClassificationFilters[filter] }}</small>
-                </span>
-                <i aria-hidden="true" />
-              </button>
-              <Transition name="classification-filter-options">
-                <div v-if="openedClassificationFilter === filter" class="classification-sidebar__options">
-                  <button type="button" :class="{ 'is-selected': !selectedClassificationFilters[filter] }" @click="selectClassificationFilter(filter, '')">
-                    <span>Все</span>
-                    <small>{{ classificationFilterAvailableCount(filter) }}</small>
-                  </button>
-                  <button
-                    v-for="option in classificationFilterOptions(filter)"
-                    :key="option"
-                    type="button"
-                    :class="{ 'is-selected': selectedClassificationFilters[filter] === option }"
-                    @click="selectClassificationFilter(filter, option)"
-                  >
-                    <span>{{ option }}</span>
-                    <small>{{ classificationFilterOptionCount(filter, option) }}</small>
-                  </button>
-                </div>
-              </Transition>
+                <button
+                  class="classification-sidebar__item"
+                  type="button"
+                  @click="toggleClassificationFilter(filter)"
+                >
+                  <span class="classification-sidebar__label">
+                    <strong>{{ filter }}</strong>
+                    <small v-if="selectedClassificationFilters[filter]">{{ selectedClassificationFilters[filter] }}</small>
+                  </span>
+                  <i aria-hidden="true" />
+                </button>
+                <Transition name="classification-filter-options">
+                  <div v-if="openedClassificationFilter === filter" class="classification-sidebar__options-shell">
+                    <div class="classification-sidebar__options">
+                      <button type="button" :class="{ 'is-selected': !selectedClassificationFilters[filter] }" @click="selectClassificationFilter(filter, '')">
+                        <span>Все</span>
+                        <small>{{ classificationFilterAvailableCount(filter) }}</small>
+                      </button>
+                      <button
+                        v-for="option in classificationFilterOptions(filter)"
+                        :key="option"
+                        type="button"
+                        :class="{ 'is-selected': selectedClassificationFilters[filter] === option }"
+                        @click="selectClassificationFilter(filter, option)"
+                      >
+                        <span>{{ option }}</span>
+                        <small>{{ classificationFilterOptionCount(filter, option) }}</small>
+                      </button>
+                    </div>
+                  </div>
+                </Transition>
+              </div>
             </div>
           </aside>
         </div>
