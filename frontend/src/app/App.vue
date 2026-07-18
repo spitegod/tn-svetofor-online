@@ -253,7 +253,7 @@ const comparisonPageSize = ref('20')
 const comparisonPage = ref(1)
 const isComparisonLoading = ref(true)
 const comparisonError = ref('')
-const isOrdersLoading = ref(false)
+const isOrdersLoading = ref(true)
 const ordersError = ref('')
 const settingsOrderMenuId = ref<number | null>(null)
 const orderRenameTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
@@ -326,7 +326,7 @@ const documentSearch = ref('')
 const settingsDocumentsPageSize = ref('10')
 const settingsDocumentsPage = ref(1)
 const documentError = ref('')
-const isDocumentTableLoading = ref(false)
+const isDocumentTableLoading = ref(true)
 const classificationCatalogRows = ref<SystemCatalogRow[]>([])
 const classificationCatalogSearch = ref('')
 const classificationCatalogSearchInput = ref('')
@@ -441,7 +441,7 @@ const systemCatalogCuratorOptions = ref(['Все кураторы', ...curatorOp
 const systemCatalogSearch = ref('')
 const selectedSystemCatalogClass = ref('Все')
 const selectedSystemCatalogCurator = ref('Все кураторы')
-const isSystemCatalogLoading = ref(false)
+const isSystemCatalogLoading = ref(true)
 const isSystemDocumentLoading = ref(true)
 const systemFilterRequestCount = ref(0)
 const isSystemFiltering = computed(() => systemFilterRequestCount.value > 0)
@@ -1952,7 +1952,6 @@ function applySystemDocumentPayload(payload: SystemDocumentResponse) {
 
 async function loadSystemDocuments(silent = false) {
   if (!silent) {
-    isSystemCatalogLoading.value = true
     isSystemDocumentLoading.value = true
   } else {
     systemFilterRequestCount.value += 1
@@ -1969,7 +1968,6 @@ async function loadSystemDocuments(silent = false) {
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить список систем'
   } finally {
     if (!silent) {
-      isSystemCatalogLoading.value = false
       isSystemDocumentLoading.value = false
     } else {
       systemFilterRequestCount.value = Math.max(0, systemFilterRequestCount.value - 1)
@@ -3962,7 +3960,24 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div class="systems-table settings-orders-table settings-table-scroll">
+          <div
+            class="systems-table settings-orders-table settings-table-scroll"
+            :class="{ 'is-empty-loading': isOrdersLoading && orders.length === 0 }"
+          >
+            <Transition name="table-filter-loading">
+              <div
+                v-if="isOrdersLoading"
+                class="systems-table__filter-loading"
+                :class="{ 'systems-table__filter-loading--initial': orders.length === 0 }"
+                role="status"
+                aria-live="polite"
+              >
+                <span>
+                  <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  Загружаем распоряжения…
+                </span>
+              </div>
+            </Transition>
             <table>
               <thead>
                 <tr>
@@ -3973,6 +3988,9 @@ onBeforeUnmount(() => {
                 </tr>
               </thead>
               <tbody>
+                <tr v-if="!isOrdersLoading && orders.length === 0">
+                  <td class="empty-table-cell" colspan="4">Распоряжений пока нет</td>
+                </tr>
                 <tr v-for="order in orders" :key="order.id">
                   <td>
                     <span class="settings-order-name">
@@ -4009,7 +4027,6 @@ onBeforeUnmount(() => {
           </div>
 
           <p v-if="ordersError" class="table-message table-message--error">{{ ordersError }}</p>
-          <p v-else-if="isOrdersLoading" class="table-message">Загрузка распоряжений...</p>
         </section>
 
         <section class="settings-section settings-editor" aria-labelledby="edit-db-title">
@@ -4067,7 +4084,24 @@ onBeforeUnmount(() => {
 
             <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
 
-            <div class="systems-table settings-data-table settings-paginated-table settings-classification-table">
+            <div
+              class="systems-table settings-data-table settings-paginated-table settings-classification-table"
+              :class="{ 'is-empty-loading': isClassificationLoading && currentSettingsClassificationRows().length === 0 }"
+            >
+              <Transition name="table-filter-loading">
+                <div
+                  v-if="isClassificationLoading"
+                  class="systems-table__filter-loading"
+                  :class="{ 'systems-table__filter-loading--initial': currentSettingsClassificationRows().length === 0 }"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span>
+                    <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    {{ classificationLoadingMessage }}
+                  </span>
+                </div>
+              </Transition>
               <table>
                 <thead>
                   <tr>
@@ -4094,7 +4128,7 @@ onBeforeUnmount(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="currentSettingsClassificationRows().length === 0">
+                  <tr v-if="!isClassificationLoading && currentSettingsClassificationRows().length === 0">
                     <td class="empty-table-cell" colspan="3">В этом распоряжении пока нет данных таблицы 1</td>
                   </tr>
                   <tr v-for="row in visibleSettingsClassificationRows()" :key="`settings-${row.id}`">
@@ -4124,7 +4158,7 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
-            <footer v-if="currentSettingsClassificationRows().length > 0" class="table-pagination settings-table-pagination">
+            <footer v-if="!isClassificationLoading && currentSettingsClassificationRows().length > 0" class="table-pagination settings-table-pagination">
               <span class="table-pagination__range">
                 Показано {{ settingsClassificationRangeStart() }}–{{ settingsClassificationRangeEnd() }} из {{ currentSettingsClassificationRows().length }}
               </span>
@@ -4174,7 +4208,24 @@ onBeforeUnmount(() => {
 
             <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
 
-            <div class="systems-table settings-data-table settings-paginated-table settings-classification-table settings-system-catalog-table">
+            <div
+              class="systems-table settings-data-table settings-paginated-table settings-classification-table settings-system-catalog-table"
+              :class="{ 'is-empty-loading': isSystemCatalogLoading && currentSettingsSystemCatalogRows().length === 0 }"
+            >
+              <Transition name="table-filter-loading">
+                <div
+                  v-if="isSystemCatalogLoading"
+                  class="systems-table__filter-loading"
+                  :class="{ 'systems-table__filter-loading--initial': currentSettingsSystemCatalogRows().length === 0 }"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span>
+                    <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    Загружаем таблицу 2…
+                  </span>
+                </div>
+              </Transition>
               <table>
                 <thead>
                   <tr>
@@ -4199,7 +4250,7 @@ onBeforeUnmount(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="currentSettingsSystemCatalogRows().length === 0">
+                  <tr v-if="!isSystemCatalogLoading && currentSettingsSystemCatalogRows().length === 0">
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 2</td>
                   </tr>
                   <tr v-for="row in visibleSettingsSystemCatalogRows()" :key="`settings-system-${row.id}`">
@@ -4245,7 +4296,7 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
-            <footer v-if="currentSettingsSystemCatalogRows().length > 0" class="table-pagination settings-table-pagination">
+            <footer v-if="!isSystemCatalogLoading && currentSettingsSystemCatalogRows().length > 0" class="table-pagination settings-table-pagination">
               <span class="table-pagination__range">
                 Показано {{ settingsSystemCatalogRangeStart() }}–{{ settingsSystemCatalogRangeEnd() }} из {{ currentSettingsSystemCatalogRows().length }}
               </span>
@@ -4286,9 +4337,25 @@ onBeforeUnmount(() => {
             </p>
 
             <p v-if="documentError" class="table-message table-message--error">{{ documentError }}</p>
-            <p v-else-if="isDocumentTableLoading" class="table-message">Загрузка таблицы 3...</p>
 
-            <div class="systems-table settings-docs-table settings-paginated-table">
+            <div
+              class="systems-table settings-docs-table settings-paginated-table"
+              :class="{ 'is-empty-loading': isDocumentTableLoading && filteredDocumentRows.length === 0 }"
+            >
+              <Transition name="table-filter-loading">
+                <div
+                  v-if="isDocumentTableLoading"
+                  class="systems-table__filter-loading"
+                  :class="{ 'systems-table__filter-loading--initial': filteredDocumentRows.length === 0 }"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span>
+                    <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    Загружаем таблицу 3…
+                  </span>
+                </div>
+              </Transition>
               <table>
                 <thead>
                   <tr>
@@ -4299,7 +4366,7 @@ onBeforeUnmount(() => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-if="filteredDocumentRows.length === 0">
+                  <tr v-if="!isDocumentTableLoading && filteredDocumentRows.length === 0">
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 3</td>
                   </tr>
                   <tr v-for="row in visibleDocumentRows" :key="`document-${row.id}`">
@@ -4374,7 +4441,7 @@ onBeforeUnmount(() => {
                 </tbody>
               </table>
             </div>
-            <footer class="table-pagination settings-table-pagination">
+            <footer v-if="!isDocumentTableLoading && filteredDocumentRows.length > 0" class="table-pagination settings-table-pagination">
               <span>Показано {{ settingsDocumentsRangeStart() }}–{{ settingsDocumentsRangeEnd() }} из {{ filteredDocumentRows.length }}</span>
               <div class="table-pagination__controls">
                 <label>

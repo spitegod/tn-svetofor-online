@@ -4364,6 +4364,7 @@ button:disabled {
 }
 
 .settings-orders-table {
+  position: relative;
   width: 100%;
   max-height: none;
   border: 0;
@@ -4679,6 +4680,7 @@ button:disabled {
 
 .settings-data-table,
 .settings-docs-table {
+  position: relative;
   width: 100%;
   border: 1px solid #dfe5ed;
   border-radius: 9px;
