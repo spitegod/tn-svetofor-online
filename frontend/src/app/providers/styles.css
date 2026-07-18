@@ -3274,6 +3274,7 @@ button:disabled {
 }
 
 .comparison-table {
+  position: relative;
   width: 100%;
   overflow-x: auto;
   border: 1px solid #dfe5ed;

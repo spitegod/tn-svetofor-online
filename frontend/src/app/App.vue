@@ -251,7 +251,7 @@ const comparisonOnlyDifferences = ref(false)
 const comparisonSort = ref<'differences-first' | 'name-asc' | 'name-desc'>('differences-first')
 const comparisonPageSize = ref('20')
 const comparisonPage = ref(1)
-const isComparisonLoading = ref(false)
+const isComparisonLoading = ref(true)
 const comparisonError = ref('')
 const isOrdersLoading = ref(false)
 const ordersError = ref('')
@@ -645,6 +645,7 @@ async function loadOrders() {
     await loadComparisonCatalogs()
   } catch (error) {
     ordersError.value = error instanceof Error ? error.message : 'Не удалось загрузить распоряжения'
+    isComparisonLoading.value = false
   } finally {
     isOrdersLoading.value = false
   }
@@ -700,6 +701,19 @@ async function loadComparisonCatalogs() {
 
   try {
     await Promise.all(comparisonOrderIds.value.map((orderId) => loadComparisonCatalog(orderId)))
+  } catch (error) {
+    comparisonError.value = error instanceof Error ? error.message : 'Не удалось загрузить данные сравнения'
+  } finally {
+    isComparisonLoading.value = false
+  }
+}
+
+async function loadComparisonOrder(orderId: number) {
+  isComparisonLoading.value = true
+  comparisonError.value = ''
+
+  try {
+    await loadComparisonCatalog(orderId)
   } catch (error) {
     comparisonError.value = error instanceof Error ? error.message : 'Не удалось загрузить данные сравнения'
   } finally {
@@ -806,7 +820,7 @@ async function saveOrderName(order: Order) {
 async function selectComparisonOrder(index: number, order: Order) {
   comparisonOrderIds.value[index] = order.id
   openedSelect.value = null
-  await loadComparisonCatalog(order.id)
+  await loadComparisonOrder(order.id)
 }
 
 function comparisonOrderOptions(currentOrderId: number) {
@@ -821,7 +835,7 @@ async function addComparisonOrder(order?: Order) {
   const nextOrder = order ?? availableComparisonOrders()[0]
   if (nextOrder) {
     comparisonOrderIds.value.push(nextOrder.id)
-    await loadComparisonCatalog(nextOrder.id)
+    await loadComparisonOrder(nextOrder.id)
   }
   openedSelect.value = null
 }
@@ -3581,7 +3595,6 @@ onBeforeUnmount(() => {
         </section>
 
         <p v-if="comparisonError" class="table-message table-message--error">{{ comparisonError }}</p>
-        <p v-else-if="isComparisonLoading" class="table-message">Загрузка сравнения...</p>
 
         <section class="comparison-toolbar" aria-label="Управление сравнением">
           <div class="comparison-toolbar__summary">
@@ -3643,7 +3656,24 @@ onBeforeUnmount(() => {
           </div>
         </section>
 
-        <div class="systems-table comparison-table">
+        <div
+          class="systems-table comparison-table"
+          :class="{ 'is-empty-loading': isComparisonLoading && comparisonRows().length === 0 }"
+        >
+          <Transition name="table-filter-loading">
+            <div
+              v-if="isComparisonLoading"
+              class="systems-table__filter-loading"
+              :class="{ 'systems-table__filter-loading--initial': comparisonRows().length === 0 }"
+              role="status"
+              aria-live="polite"
+            >
+              <span>
+                <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
+                Загружаем сравнение…
+              </span>
+            </div>
+          </Transition>
           <table>
             <thead>
               <tr>
@@ -3655,7 +3685,7 @@ onBeforeUnmount(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-if="comparisonRows().length === 0">
+              <tr v-if="!isComparisonLoading && comparisonRows().length === 0">
                 <td class="empty-table-cell" :colspan="comparisonOrderIds.length + 2">
                   В выбранных распоряжениях пока нет данных таблицы 2
                 </td>
