@@ -292,7 +292,7 @@ const afterOptions = ref(['Все', ...classOptions])
 const selectedBeforeFilter = ref('Все')
 const selectedAfterFilter = ref('Все')
 const tableSearch = ref('')
-const isClassificationLoading = ref(false)
+const isClassificationLoading = ref(true)
 const isClassificationFiltering = ref(false)
 const isChangesRefreshing = ref(false)
 const changesLastRefreshedAt = ref('')
@@ -442,7 +442,7 @@ const systemCatalogSearch = ref('')
 const selectedSystemCatalogClass = ref('Все')
 const selectedSystemCatalogCurator = ref('Все кураторы')
 const isSystemCatalogLoading = ref(false)
-const isSystemDocumentLoading = ref(false)
+const isSystemDocumentLoading = ref(true)
 const systemFilterRequestCount = ref(0)
 const isSystemFiltering = computed(() => systemFilterRequestCount.value > 0)
 const isSystemsRefreshing = ref(false)
@@ -2684,7 +2684,10 @@ onBeforeUnmount(() => {
 
         <div
           class="systems-table changes-table-card"
-          :class="afterFilterAccentModifier() && `changes-table-card--${afterFilterAccentModifier()}`"
+          :class="[
+            afterFilterAccentModifier() && `changes-table-card--${afterFilterAccentModifier()}`,
+            { 'is-empty-loading': (isClassificationLoading || isClassificationFiltering) && currentClassificationRows().length === 0 },
+          ]"
           :style="{ '--before-accent': statusAccentColor(selectedBeforeFilter), '--after-accent': statusAccentColor(selectedAfterFilter) }"
         >
           <header class="changes-table-card__header">
@@ -2700,7 +2703,13 @@ onBeforeUnmount(() => {
             <span class="changes-table-card__count">{{ currentClassificationRows().length }} систем</span>
           </header>
           <Transition name="table-filter-loading">
-            <div v-if="isClassificationLoading || isClassificationFiltering" class="systems-table__filter-loading" role="status" aria-live="polite">
+            <div
+              v-if="isClassificationLoading || isClassificationFiltering"
+              class="systems-table__filter-loading"
+              :class="{ 'systems-table__filter-loading--initial': currentClassificationRows().length === 0 }"
+              role="status"
+              aria-live="polite"
+            >
               <span>
                 <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
                 {{ isClassificationLoading ? classificationLoadingMessage : 'Применяем фильтры…' }}
@@ -2724,7 +2733,7 @@ onBeforeUnmount(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-if="currentClassificationRows().length === 0">
+              <tr v-if="!isClassificationLoading && !isClassificationFiltering && currentClassificationRows().length === 0">
                 <td class="empty-table-cell" colspan="3">{{ classificationChangesEmptyMessage() }}</td>
               </tr>
               <tr v-for="row in visibleClassificationRows()" :key="row.id" tabindex="-1">
@@ -3040,9 +3049,18 @@ onBeforeUnmount(() => {
 
         </section>
 
-        <div class="systems-table systems-table--catalog">
+        <div
+          class="systems-table systems-table--catalog"
+          :class="{ 'is-empty-loading': (isSystemDocumentLoading || isSystemFiltering) && currentSystemDocumentRows().length === 0 }"
+        >
           <Transition name="table-filter-loading">
-            <div v-if="isSystemDocumentLoading || isSystemFiltering" class="systems-table__filter-loading" role="status" aria-live="polite">
+            <div
+              v-if="isSystemDocumentLoading || isSystemFiltering"
+              class="systems-table__filter-loading"
+              :class="{ 'systems-table__filter-loading--initial': currentSystemDocumentRows().length === 0 }"
+              role="status"
+              aria-live="polite"
+            >
               <span>
                 <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
                 {{ isSystemDocumentLoading ? 'Загружаем список систем…' : 'Применяем фильтры…' }}
@@ -3060,7 +3078,7 @@ onBeforeUnmount(() => {
               </tr>
             </thead>
             <tbody>
-              <tr v-if="currentSystemDocumentRows().length === 0">
+              <tr v-if="!isSystemDocumentLoading && !isSystemFiltering && currentSystemDocumentRows().length === 0">
                 <td class="empty-table-cell" colspan="5">В таблице 3 этого распоряжения пока нет систем</td>
               </tr>
               <tr v-for="row in visibleSystemDocumentRows()" :key="row.id" tabindex="-1">

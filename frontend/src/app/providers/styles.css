@@ -1546,6 +1546,15 @@ button:disabled {
   backdrop-filter: blur(1px);
 }
 
+.systems-table.is-empty-loading {
+  min-height: 220px;
+}
+
+.systems-table__filter-loading--initial {
+  align-items: center;
+  padding-top: 0;
+}
+
 .systems-table__filter-loading > span {
   display: inline-flex;
   min-height: 38px;
