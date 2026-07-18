@@ -4489,6 +4489,17 @@ button:disabled {
   box-shadow: 0 14px 30px rgba(31, 41, 55, 0.14);
 }
 
+.settings-orders-table tbody tr:last-child .settings-order-menu {
+  top: auto;
+  bottom: calc(50% + 19px);
+  transform-origin: bottom right;
+}
+
+.settings-orders-table tbody tr:last-child .settings-order-menu.select-menu-enter-from,
+.settings-orders-table tbody tr:last-child .settings-order-menu.select-menu-leave-to {
+  transform: translateY(8px) scaleY(0.96);
+}
+
 .settings-order-menu button {
   display: flex;
   width: 100%;
