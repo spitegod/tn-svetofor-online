@@ -3704,19 +3704,13 @@ onBeforeUnmount(() => {
               </span>
               <div class="parser-settings__content">
                 <h1 id="parser-settings-title">Парсинг навигатора</h1>
-                <p>Обновляет ссылки, типы и характеристики систем с nav.tn.ru независимо от выбранного распоряжения.</p>
-                <p class="parser-settings__hint">Автоматическое обновление начнёт отсчитываться после первого успешного запуска.</p>
+                <div class="parser-settings__schedule">
+                  <span>Автозапуск каждые <strong>{{ navParserIntervalDays }}</strong> дн.</span>
+                  <small>{{ navParserNextRunLabel() }}</small>
+                </div>
               </div>
             </div>
             <div class="parser-settings__controls">
-              <span class="parser-settings__schedule">
-                <span>Автозапуск каждые <strong>{{ navParserIntervalDays }}</strong> дн.</span>
-                <small>{{ navParserNextRunLabel() }}</small>
-              </span>
-              <button class="parser-settings__toggle" type="button" :aria-expanded="isNavParserSettingsOpen" @click="isNavParserSettingsOpen = !isNavParserSettingsOpen">
-                Настройки
-                <ChevronDown :class="{ 'is-open': isNavParserSettingsOpen }" :size="17" :stroke-width="1.8" aria-hidden="true" />
-              </button>
               <button class="import-button parser-settings__button" type="button" :disabled="isNavParsing" @click="runNavParser">
                 {{ isNavParsing ? 'Парсинг выполняется…' : 'Запустить парсер' }}
               </button>
@@ -3782,7 +3776,6 @@ onBeforeUnmount(() => {
             <header class="parser-history__header">
               <div>
                 <h2 id="parser-history-title">Журнал всех запусков</h2>
-                <p>Ручные и автоматические запуски парсера</p>
               </div>
               <span>{{ navParserRuns.length }} запусков</span>
             </header>
@@ -3824,53 +3817,65 @@ onBeforeUnmount(() => {
               </article>
             </div>
           </section>
-          <Transition name="parser-options">
-            <div v-if="isNavParserSettingsOpen" class="parser-options">
-              <div class="parser-options__heading">
-                <div>
-                  <strong>Расширенные настройки</strong>
-                  <span>Параметры применяются при следующем ручном или автоматическом запуске.</span>
+          <section class="parser-options-section">
+            <button
+              class="parser-options__toggle"
+              type="button"
+              :aria-expanded="isNavParserSettingsOpen"
+              @click="isNavParserSettingsOpen = !isNavParserSettingsOpen"
+            >
+              <span>Настройки</span>
+              <ChevronDown :class="{ 'is-open': isNavParserSettingsOpen }" :size="17" :stroke-width="1.9" aria-hidden="true" />
+            </button>
+            <Transition name="parser-options">
+              <div v-if="isNavParserSettingsOpen" class="parser-options__shell">
+                <div class="parser-options">
+                  <div class="parser-options__heading">
+                    <div>
+                      <strong>Расширенные настройки</strong>
+                    </div>
+                    <button class="parser-options__save" type="button" :disabled="isNavSettingsSaving" @click="saveNavParserSettings">
+                      {{ isNavSettingsSaving ? 'Сохранение…' : 'Сохранить настройки' }}
+                    </button>
+                  </div>
+                  <div class="parser-options__grid">
+                    <label>
+                      <span>Период обновления</span>
+                      <small>Через сколько дней парсер сам запустится снова.</small>
+                      <span class="parser-options__input"><input v-model.number="navParserIntervalDays" type="number" min="1" max="365" /><em>дней</em></span>
+                    </label>
+                    <label>
+                      <span>Параллельные запросы</span>
+                      <small>Сколько страниц nav.tn.ru загружать одновременно. Рекомендуемое значение — 4.</small>
+                      <span class="parser-options__input"><input v-model.number="navParserWorkerCount" type="number" min="1" max="10" /><em>шт.</em></span>
+                    </label>
+                    <label>
+                      <span>Тайм-аут запроса</span>
+                      <small>Сколько ждать ответа сайта, прежде чем считать запрос неудачным. Рекомендуется 35 секунд.</small>
+                      <span class="parser-options__input"><input v-model.number="navParserRequestTimeout" type="number" min="5" max="120" /><em>сек.</em></span>
+                    </label>
+                    <label>
+                      <span>Количество попыток</span>
+                      <small>Сколько раз повторить запрос, если сайт временно не ответил. Безопасное значение — 3.</small>
+                      <span class="parser-options__input"><input v-model.number="navParserRetryAttempts" type="number" min="1" max="5" /><em>раз</em></span>
+                    </label>
+                    <label>
+                      <span>Задержка между попытками</span>
+                      <small>Пауза перед повторным запросом.</small>
+                      <span class="parser-options__input"><input v-model.number="navParserRetryDelay" type="number" min="1" max="30" /><em>сек.</em></span>
+                    </label>
+                    <label class="parser-options__switch">
+                      <span>
+                        <strong>Резервный поиск</strong>
+                        <small>Если система не найдена в общем каталоге, искать её отдельно через поиск nav.tn.ru.</small>
+                      </span>
+                      <input v-model="navParserFallbackSearch" type="checkbox" />
+                    </label>
+                  </div>
                 </div>
-                <button class="parser-options__save" type="button" :disabled="isNavSettingsSaving" @click="saveNavParserSettings">
-                  {{ isNavSettingsSaving ? 'Сохранение…' : 'Сохранить настройки' }}
-                </button>
               </div>
-              <div class="parser-options__grid">
-                <label>
-                  <span>Период обновления</span>
-                  <small>Через сколько дней парсер сам запустится снова. Для ежедневного обновления оставьте 1.</small>
-                  <span class="parser-options__input"><input v-model.number="navParserIntervalDays" type="number" min="1" max="365" /><em>дней</em></span>
-                </label>
-                <label>
-                  <span>Параллельные запросы</span>
-                  <small>Сколько страниц nav.tn.ru загружать одновременно. Рекомендуемое значение — 4.</small>
-                  <span class="parser-options__input"><input v-model.number="navParserWorkerCount" type="number" min="1" max="10" /><em>шт.</em></span>
-                </label>
-                <label>
-                  <span>Тайм-аут запроса</span>
-                  <small>Сколько ждать ответа сайта, прежде чем считать запрос неудачным. Рекомендуется 35 секунд.</small>
-                  <span class="parser-options__input"><input v-model.number="navParserRequestTimeout" type="number" min="5" max="120" /><em>сек.</em></span>
-                </label>
-                <label>
-                  <span>Количество попыток</span>
-                  <small>Сколько раз повторить запрос, если сайт временно не ответил. Безопасное значение — 3.</small>
-                  <span class="parser-options__input"><input v-model.number="navParserRetryAttempts" type="number" min="1" max="5" /><em>раз</em></span>
-                </label>
-                <label>
-                  <span>Задержка между попытками</span>
-                  <small>Пауза перед повторным запросом. После каждой следующей ошибки она автоматически увеличивается.</small>
-                  <span class="parser-options__input"><input v-model.number="navParserRetryDelay" type="number" min="1" max="30" /><em>сек.</em></span>
-                </label>
-                <label class="parser-options__switch">
-                  <span>
-                    <strong>Резервный поиск</strong>
-                    <small>Если система не найдена в общем каталоге, искать её отдельно через поиск nav.tn.ru. Лучше оставить включённым.</small>
-                  </span>
-                  <input v-model="navParserFallbackSearch" type="checkbox" />
-                </label>
-              </div>
-            </div>
-          </Transition>
+            </Transition>
+          </section>
           <p v-if="navSettingsError" class="table-message table-message--error">{{ navSettingsError }}</p>
           <p v-else-if="navSettingsMessage" class="table-message table-message--success">{{ navSettingsMessage }}</p>
           <p v-if="navParseError" class="table-message table-message--error">{{ navParseError }}</p>
@@ -3901,7 +3906,6 @@ onBeforeUnmount(() => {
                   <h2 id="orders-db-title">Управление базами данных</h2>
                   <em>Баз: {{ orders.length }}</em>
                 </span>
-                <p>Каждое распоряжение хранит отдельный набор систем, классов и комментариев.</p>
               </div>
             </div>
             <button class="settings-create-order" type="button" @click="createOrder">
