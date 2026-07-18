@@ -27,6 +27,37 @@ type ClassificationService struct {
 
 const unassignedConstructionType = "Тип не присвоен"
 
+type knownNAVSystem struct {
+	URL              string
+	ConstructionType string
+}
+
+var knownNAVSystems = map[string]knownNAVSystem{
+	"тн гео полигон фрост": {
+		URL:              "https://nav.tn.ru/systems/poligony-ploshchadki-khraneniya-i-pr/tn-geo-poligon-frost/",
+		ConstructionType: "Специальные сооружения",
+	},
+	"тн гео хвостохранилище фрост": {
+		URL:              "https://nav.tn.ru/systems/iskusstvennye-vodoemy-prudy-i-pr/tn-geo-khvostokhranilishche-frost/",
+		ConstructionType: "Специальные сооружения",
+	},
+	"тн гео амбар шламовый фрост": {
+		URL:              "https://nav.tn.ru/systems/iskusstvennye-vodoemy-prudy-i-pr/tn-geo-ambar-shlamovyy-frost/",
+		ConstructionType: "Специальные сооружения",
+	},
+	"тн авиа впп фрост": {
+		URL:              "https://nav.tn.ru/systems/konstruktsiya-letnogo-polya/tn-avia-vpp-frost/",
+		ConstructionType: "Транспортное и дорожное строительство",
+	},
+	"тн кровля солид керамзит": {
+		URL:              "https://nav.tn.ru/systems/ploskaya-krysha/tn-krovlya-solid-keramzit/",
+		ConstructionType: "Промышленное и гражданское строительство",
+	},
+	"тн техизоляция камин": {
+		ConstructionType: "Индивидуальное жилищное строительство",
+	},
+}
+
 func NewClassificationService(repo *repository.ClassificationRepository) *ClassificationService {
 	return &ClassificationService{
 		repo: repo,
@@ -299,6 +330,15 @@ func (s *ClassificationService) resolveSystemURLs(ctx context.Context, rows []mo
 }
 
 func (s *ClassificationService) resolveSystemData(ctx context.Context, systemName string) (string, string) {
+	if systemURL, constructionType, found, err := s.repo.NavSystemData(ctx, systemName); err == nil && found {
+		if normalizedType := normalizeConstructionType(constructionType); normalizedType != unassignedConstructionType {
+			return systemURL, normalizedType
+		}
+	}
+	if system, found := knownNAVSystemData(systemName); found {
+		return system.URL, system.ConstructionType
+	}
+
 	searchURL := "https://nav.tn.ru/search/?q=" + url.QueryEscape(systemName)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
 	if err != nil {
@@ -325,11 +365,11 @@ func systemDataFromSearch(body io.Reader, systemName string) (string, string) {
 		return "", unassignedConstructionType
 	}
 
-	wantedName := normalizeSystemName(systemName)
+	wantedName := normalizeNAVLookupName(systemName)
 	for _, anchor := range findNodes(document, func(node *html.Node) bool {
 		return node.Type == html.ElementNode && node.Data == "a" && hasClass(node, "b-search-teaser__title")
 	}) {
-		if normalizeSystemName(nodeText(anchor)) != wantedName {
+		if normalizeNAVLookupName(nodeText(anchor)) != wantedName {
 			continue
 		}
 
@@ -366,6 +406,16 @@ func systemDataFromSearch(body io.Reader, systemName string) (string, string) {
 	return "", unassignedConstructionType
 }
 
+func knownNAVSystemData(systemName string) (knownNAVSystem, bool) {
+	system, found := knownNAVSystems[normalizeNAVLookupName(systemName)]
+	return system, found
+}
+
+func normalizeNAVLookupName(value string) string {
+	normalized := normalizeSystemName(value)
+	return strings.TrimSpace(strings.TrimPrefix(normalized, "система "))
+}
+
 func normalizeConstructionType(value string) string {
 	normalized := normalizeSystemName(value)
 	switch {
@@ -375,7 +425,7 @@ func normalizeConstructionType(value string) string {
 		return "Индивидуальное жилищное строительство"
 	case strings.Contains(normalized, "транспорт") || strings.Contains(normalized, "дорож"):
 		return "Транспортное и дорожное строительство"
-	case strings.Contains(normalized, "специальн") || strings.Contains(normalized, "спецсооруж"):
+	case normalized == "сс" || strings.Contains(normalized, "специальн") || strings.Contains(normalized, "спецсооруж") || strings.Contains(normalized, "спец сооруж"):
 		return "Специальные сооружения"
 	default:
 		return unassignedConstructionType

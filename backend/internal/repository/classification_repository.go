@@ -17,6 +17,32 @@ func NewClassificationRepository(db *sql.DB) *ClassificationRepository {
 	return &ClassificationRepository{db: db}
 }
 
+func (r *ClassificationRepository) NavSystemData(ctx context.Context, systemName string) (string, string, bool, error) {
+	var systemURL string
+	var constructionType string
+	err := r.db.QueryRowContext(ctx, `
+		SELECT nav.system_url, COALESCE((
+			SELECT characteristic.value
+			FROM nav_system_characteristics characteristic
+			WHERE characteristic.system_key = nav.system_key
+				AND LOWER(BTRIM(characteristic.name)) IN ('сегмент строительства', 'тип строительства')
+			ORDER BY
+				CASE WHEN LOWER(BTRIM(characteristic.name)) = 'сегмент строительства' THEN 0 ELSE 1 END,
+				characteristic.position
+			LIMIT 1
+		), '')
+		FROM nav_systems nav
+		WHERE nav.system_key = LOWER(REGEXP_REPLACE(BTRIM($1), '\s+', ' ', 'g'))
+	`, systemName).Scan(&systemURL, &constructionType)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", "", false, nil
+		}
+		return "", "", false, fmt.Errorf("load NAV system data: %w", err)
+	}
+	return systemURL, constructionType, true, nil
+}
+
 func (r *ClassificationRepository) ReplaceAll(ctx context.Context, orderID int64, rows []model.ClassificationChange) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

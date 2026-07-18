@@ -43,11 +43,23 @@ func TestNormalizeConstructionType(t *testing.T) {
 		"ИЖС": "Индивидуальное жилищное строительство",
 		"транспортное строительство": "Транспортное и дорожное строительство",
 		"Специальные сооружения":     "Специальные сооружения",
+		"Спец. сооружения":           "Специальные сооружения",
+		"СС":                         "Специальные сооружения",
 		"неизвестный сегмент":        unassignedConstructionType,
 	}
 	for value, want := range tests {
 		if got := normalizeConstructionType(value); got != want {
 			t.Errorf("normalizeConstructionType(%q) = %q, want %q", value, got, want)
 		}
+	}
+}
+
+func TestKnownNAVSystemDataNormalizesSystemPrefix(t *testing.T) {
+	got, found := knownNAVSystemData("СИСТЕМА ТН-КРОВЛЯ СОЛИД КЕРАМЗИТ")
+	if !found {
+		t.Fatal("knownNAVSystemData() did not find system")
+	}
+	if got.ConstructionType != "Промышленное и гражданское строительство" {
+		t.Fatalf("knownNAVSystemData() construction type = %q", got.ConstructionType)
 	}
 }

@@ -261,6 +261,39 @@ WHERE NOT EXISTS (
 	WHERE existing.system_key = source.system_key
 )
 ON CONFLICT (system_key, position) DO NOTHING;
+
+UPDATE classification_changes change
+SET construction_type = characteristic.value
+FROM nav_systems nav
+JOIN nav_system_characteristics characteristic
+	ON characteristic.system_key = nav.system_key
+	AND LOWER(BTRIM(characteristic.name)) IN ('сегмент строительства', 'тип строительства')
+WHERE change.construction_type = 'Тип не присвоен'
+	AND nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(change.system_name), '\s+', ' ', 'g'))
+	AND characteristic.value IN (
+		'Промышленное и гражданское строительство',
+		'Индивидуальное жилищное строительство',
+		'Транспортное и дорожное строительство',
+		'Специальные сооружения'
+	);
+
+UPDATE classification_changes change
+SET construction_type = known.construction_type,
+	system_url = CASE WHEN known.system_url <> '' THEN known.system_url ELSE change.system_url END
+FROM (VALUES
+	('тн-гео полигон фрост', 'https://nav.tn.ru/systems/poligony-ploshchadki-khraneniya-i-pr/tn-geo-poligon-frost/', 'Специальные сооружения'),
+	('тн-гео хвостохранилище фрост', 'https://nav.tn.ru/systems/iskusstvennye-vodoemy-prudy-i-pr/tn-geo-khvostokhranilishche-frost/', 'Специальные сооружения'),
+	('тн-гео амбар шламовый фрост', 'https://nav.tn.ru/systems/iskusstvennye-vodoemy-prudy-i-pr/tn-geo-ambar-shlamovyy-frost/', 'Специальные сооружения'),
+	('тн-авиа впп фрост', 'https://nav.tn.ru/systems/konstruktsiya-letnogo-polya/tn-avia-vpp-frost/', 'Транспортное и дорожное строительство'),
+	('тн-кровля солид керамзит', 'https://nav.tn.ru/systems/ploskaya-krysha/tn-krovlya-solid-keramzit/', 'Промышленное и гражданское строительство'),
+	('тн-техизоляция камин', '', 'Индивидуальное жилищное строительство')
+) AS known(system_key, system_url, construction_type)
+WHERE change.construction_type = 'Тип не присвоен'
+	AND REGEXP_REPLACE(
+		LOWER(REGEXP_REPLACE(BTRIM(change.system_name), '\s+', ' ', 'g')),
+		'^система\s+',
+		''
+	) = known.system_key;
 `
 
 	if _, err := database.ExecContext(ctx, ordersQuery); err != nil {
