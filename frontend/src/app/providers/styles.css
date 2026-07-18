@@ -1546,6 +1546,15 @@ button:disabled {
   backdrop-filter: blur(1px);
 }
 
+.systems-table.is-empty-loading {
+  min-height: 220px;
+}
+
+.systems-table__filter-loading--initial {
+  align-items: center;
+  padding-top: 0;
+}
+
 .systems-table__filter-loading > span {
   display: inline-flex;
   min-height: 38px;
@@ -1963,8 +1972,17 @@ button:disabled {
 }
 
 .classification-cards {
+  position: relative;
   display: grid;
   gap: 10px;
+}
+
+.classification-cards.is-empty-loading {
+  min-height: 220px;
+  overflow: hidden;
+  border: 1px solid #dfe5ed;
+  border-radius: 11px;
+  background: #ffffff;
 }
 
 .classification-card-row {
@@ -3265,6 +3283,7 @@ button:disabled {
 }
 
 .comparison-table {
+  position: relative;
   width: 100%;
   overflow-x: auto;
   border: 1px solid #dfe5ed;
@@ -4354,6 +4373,7 @@ button:disabled {
 }
 
 .settings-orders-table {
+  position: relative;
   width: 100%;
   max-height: none;
   border: 0;
@@ -4487,6 +4507,17 @@ button:disabled {
   background: #ffffff;
   padding: 6px;
   box-shadow: 0 14px 30px rgba(31, 41, 55, 0.14);
+}
+
+.settings-orders-table tbody tr:last-child .settings-order-menu {
+  top: auto;
+  bottom: calc(50% + 19px);
+  transform-origin: bottom right;
+}
+
+.settings-orders-table tbody tr:last-child .settings-order-menu.select-menu-enter-from,
+.settings-orders-table tbody tr:last-child .settings-order-menu.select-menu-leave-to {
+  transform: translateY(8px) scaleY(0.96);
 }
 
 .settings-order-menu button {
@@ -4658,6 +4689,7 @@ button:disabled {
 
 .settings-data-table,
 .settings-docs-table {
+  position: relative;
   width: 100%;
   border: 1px solid #dfe5ed;
   border-radius: 9px;
