@@ -1972,8 +1972,17 @@ button:disabled {
 }
 
 .classification-cards {
+  position: relative;
   display: grid;
   gap: 10px;
+}
+
+.classification-cards.is-empty-loading {
+  min-height: 220px;
+  overflow: hidden;
+  border: 1px solid #dfe5ed;
+  border-radius: 11px;
+  background: #ffffff;
 }
 
 .classification-card-row {

@@ -334,7 +334,7 @@ const isClassificationSearchPending = ref(false)
 const classificationView = ref<'grid' | 'list'>('grid')
 const classificationCatalogPageSize = ref('50')
 const classificationCatalogPage = ref(1)
-const isClassificationCatalogLoading = ref(false)
+const isClassificationCatalogLoading = ref(true)
 const classificationCatalogError = ref('')
 const classificationCatalogConstructionTypes = computed(() => constructionTypes.map((name) => ({
   name,
@@ -3284,14 +3284,32 @@ onBeforeUnmount(() => {
               </div>
             </section>
 
-            <section class="classification-cards" :class="{ 'is-list-view': classificationView === 'list' }" aria-label="Системы классификации" aria-live="polite">
+            <section
+              class="classification-cards"
+              :class="{
+                'is-list-view': classificationView === 'list',
+                'is-empty-loading': isClassificationCatalogLoading && classificationSystems.length === 0,
+              }"
+              aria-label="Системы классификации"
+              aria-live="polite"
+            >
+            <Transition name="table-filter-loading">
+              <div
+                v-if="isClassificationCatalogLoading"
+                class="systems-table__filter-loading"
+                :class="{ 'systems-table__filter-loading--initial': classificationSystems.length === 0 }"
+                role="status"
+              >
+                <span>
+                  <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  Загружаем системы классификации…
+                </span>
+              </div>
+            </Transition>
             <p v-if="classificationCatalogError" class="table-message table-message--error classification-cards__message">
               {{ classificationCatalogError }}
             </p>
-            <p v-else-if="isClassificationCatalogLoading" class="table-message classification-cards__message">
-              Загрузка систем из таблицы 2...
-            </p>
-            <p v-else-if="classificationSystems.length === 0" class="table-message classification-cards__message">
+            <p v-else-if="!isClassificationCatalogLoading && classificationSystems.length === 0" class="table-message classification-cards__message">
               {{ classificationEmptyMessage }}
             </p>
             <div v-for="(row, rowIndex) in classificationSystemRows" :key="rowIndex" class="classification-card-row">
@@ -3454,10 +3472,10 @@ onBeforeUnmount(() => {
                 <X :size="13" :stroke-width="2" aria-hidden="true" />
               </button>
             </div>
-            <p v-if="classificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
+            <p v-if="!isClassificationCatalogLoading && classificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
               Для выбранного типа нет доступных характеристик.
             </p>
-            <p v-else-if="visibleClassificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
+            <p v-else-if="!isClassificationCatalogLoading && visibleClassificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
               Характеристики не найдены.
             </p>
             <div
