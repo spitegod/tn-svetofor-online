@@ -346,6 +346,7 @@ const classificationCardColumns = ref(3)
 const openedClassificationFilter = ref<string | null>(null)
 const selectedClassificationFilters = ref<Record<string, string>>({})
 const classificationFilterSearch = ref('')
+const isClassificationLegendOpen = ref(false)
 const systemTypeSourceRows = computed(() => activePage.value === 'systems' ? systemDocumentRows.value : classificationCatalogRows.value)
 const systemTypes = computed(() => [{ slug: '', name: 'Все системы', imageUrl: '', position: 0 }, ...parsedSystemTypes.value].map((type) => ({
   ...type,
@@ -1907,6 +1908,65 @@ function toggleClassificationFilter(name: string) {
   openedClassificationFilter.value = openedClassificationFilter.value === name ? null : name
 }
 
+const classificationFilterAnimations = new WeakMap<HTMLElement, Animation>()
+
+function runClassificationFilterAnimation(
+  element: Element,
+  keyframes: Keyframe[],
+  done: () => void,
+  keepExpanded: boolean,
+) {
+  const panel = element as HTMLElement
+  classificationFilterAnimations.get(panel)?.cancel()
+
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    done()
+    return
+  }
+
+  panel.style.overflow = 'hidden'
+  const animation = panel.animate(keyframes, {
+    duration: 260,
+    easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+  })
+  classificationFilterAnimations.set(panel, animation)
+
+  animation.addEventListener('finish', () => {
+    classificationFilterAnimations.delete(panel)
+    if (keepExpanded) {
+      panel.style.removeProperty('height')
+      panel.style.removeProperty('overflow')
+      panel.style.removeProperty('opacity')
+      panel.style.removeProperty('transform')
+    }
+    done()
+  }, { once: true })
+}
+
+function expandClassificationFilter(element: Element, done: () => void) {
+  const panel = element as HTMLElement
+  const targetHeight = panel.scrollHeight
+  runClassificationFilterAnimation(panel, [
+    { height: '0px', opacity: 0, transform: 'translateY(-5px)' },
+    { height: `${targetHeight}px`, opacity: 1, transform: 'translateY(0)' },
+  ], done, true)
+}
+
+function collapseClassificationFilter(element: Element, done: () => void) {
+  const panel = element as HTMLElement
+  const currentHeight = panel.getBoundingClientRect().height
+  runClassificationFilterAnimation(panel, [
+    { height: `${currentHeight}px`, opacity: 1, transform: 'translateY(0)' },
+    { height: '0px', opacity: 0, transform: 'translateY(-5px)' },
+  ], done, false)
+}
+
+function cancelClassificationFilterAnimation(element: Element) {
+  const panel = element as HTMLElement
+  classificationFilterAnimations.get(panel)?.cancel()
+  classificationFilterAnimations.delete(panel)
+}
+
 function selectClassificationFilter(name: string, value: string) {
   const next = { ...selectedClassificationFilters.value }
   if (value) {
@@ -2517,7 +2577,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app" @click="openedSelect = null; settingsOrderMenuId = null">
+  <div class="app" @click="openedSelect = null; settingsOrderMenuId = null; isClassificationLegendOpen = false">
     <header class="site-header">
       <div class="header-container">
         <div class="main-header__inner">
@@ -2537,6 +2597,41 @@ onBeforeUnmount(() => {
               {{ item.label }}
             </button>
           </nav>
+
+          <div class="header-class-legend" @click.stop>
+            <button
+              class="header-class-legend__toggle"
+              :class="{ 'is-open': isClassificationLegendOpen }"
+              type="button"
+              aria-label="Показать легенду классов систем"
+              title="Легенда классов систем"
+              :aria-expanded="isClassificationLegendOpen"
+              aria-controls="global-class-legend"
+              @click="isClassificationLegendOpen = !isClassificationLegendOpen"
+            >
+              <Info :size="18" :stroke-width="2" aria-hidden="true" />
+            </button>
+            <Transition name="header-legend">
+              <div
+                v-if="isClassificationLegendOpen"
+                id="global-class-legend"
+                class="classification-class-legend header-class-legend__panel"
+              >
+                <article class="classification-class-legend__item classification-class-legend__item--recommended">
+                  <span class="classification-class-legend__marker" aria-hidden="true" />
+                  <p><strong>Рекомендованные</strong> — системы ТН, обладающие исключительными характеристиками, направленными на повышение безопасности, энергоэффективности и долговечности зданий и сооружений.</p>
+                </article>
+                <article class="classification-class-legend__item classification-class-legend__item--allowed">
+                  <span class="classification-class-legend__marker" aria-hidden="true" />
+                  <p><strong>Разрешённые</strong> — системы ТН, обладающие высокими характеристиками, направленными на повышение безопасности, энергоэффективности и долговечности зданий и сооружений, но имеющие более низкий приоритет по сравнению с рекомендованными системами.</p>
+                </article>
+                <article class="classification-class-legend__item classification-class-legend__item--forbidden">
+                  <span class="classification-class-legend__marker" aria-hidden="true" />
+                  <p><strong>Запрещённые</strong> — системы ТН, противоречащие нормам безопасности и внутренним нормам ТН и/или не имеющие необходимой разрешительной документации для применения в стране присутствия. К этой категории относятся решения, не соответствующие законодательству и/или нормативной документации по механической, пожарной, санитарно-эпидемиологической, экологической и другим видам безопасности.</p>
+                </article>
+              </div>
+            </Transition>
+          </div>
         </div>
       </div>
     </header>
@@ -3554,7 +3649,13 @@ onBeforeUnmount(() => {
                   </span>
                   <i aria-hidden="true" />
                 </button>
-                <Transition name="classification-filter-options">
+                <Transition
+                  :css="false"
+                  @enter="expandClassificationFilter"
+                  @leave="collapseClassificationFilter"
+                  @enter-cancelled="cancelClassificationFilterAnimation"
+                  @leave-cancelled="cancelClassificationFilterAnimation"
+                >
                   <div v-if="openedClassificationFilter === filter" class="classification-sidebar__options-shell">
                     <div class="classification-sidebar__options">
                       <button type="button" :class="{ 'is-selected': !selectedClassificationFilters[filter] }" @click="selectClassificationFilter(filter, '')">
