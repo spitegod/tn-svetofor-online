@@ -248,7 +248,7 @@ const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
 const comparisonOnlyDifferences = ref(false)
 const comparisonSort = ref<'differences-first' | 'name-asc' | 'name-desc'>('differences-first')
-const comparisonPageSize = ref('20')
+const comparisonPageSize = ref('50')
 const comparisonPage = ref(1)
 const isComparisonLoading = ref(true)
 const comparisonError = ref('')
@@ -3884,7 +3884,6 @@ onBeforeUnmount(() => {
             <label>
               <span>Строк на странице</span>
               <select v-model="comparisonPageSize" @change="changeComparisonPageSize">
-                <option value="20">20</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
                 <option value="all">Все</option>
