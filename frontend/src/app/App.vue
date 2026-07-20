@@ -277,7 +277,7 @@ const importFileInput = ref<HTMLInputElement | null>(null)
 const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const orderWorkbookInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
-const classificationPageSize = ref('20')
+const classificationPageSize = ref('50')
 const classificationPage = ref(1)
 const settingsClassificationPageSize = ref('10')
 const settingsClassificationPage = ref(1)
@@ -296,11 +296,13 @@ const tableSearch = ref('')
 const isClassificationLoading = ref(true)
 const isClassificationFiltering = ref(false)
 const isChangesRefreshing = ref(false)
+const isChangesRefreshDone = ref(false)
 const changesLastRefreshedAt = ref('')
 const classificationLoadingMessage = ref('Загрузка таблицы...')
 const classificationError = ref('')
 const classificationConstructionTypes = computed(() => [...constructionTypes, 'Тип не присвоен'].map((name) => ({
   name,
+  label: name === 'Тип не присвоен' ? 'Тип не найден' : name,
   count: name === 'Все'
     ? classificationRows.value.length
     : classificationRows.value.filter((row) => row.constructionType === name).length,
@@ -525,36 +527,27 @@ function formatOrderDateTime(value: string) {
   }).format(new Date(value))
 }
 
-function selectedOrderUpdatedAt() {
-  return orders.value.find((order) => order.id === selectedOrderId.value)?.updatedAt ?? ''
-}
-
-function changesPageUpdatedAt() {
-  return changesLastRefreshedAt.value || selectedOrderUpdatedAt()
-}
-
-function systemsPageUpdatedAt() {
-  return systemsLastRefreshedAt.value || selectedOrderUpdatedAt()
-}
-
-function addedSystemsHint() {
-  const index = orders.value.findIndex((order) => order.id === selectedOrderId.value)
-  return index === orders.value.length - 1
-    ? 'Относительно пустой базы'
-    : 'Относительно предыдущего распоряжения'
-}
-
 async function refreshChangesPage() {
   if (isChangesRefreshing.value) {
     return
   }
+  const startedAt = performance.now()
+  isChangesRefreshDone.value = false
   isChangesRefreshing.value = true
   try {
     await loadOrders()
     await loadClassificationChanges()
     changesLastRefreshedAt.value = new Date().toISOString()
   } finally {
+    const remainingAnimationTime = Math.max(0, 1000 - (performance.now() - startedAt))
+    if (remainingAnimationTime > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, remainingAnimationTime))
+    }
     isChangesRefreshing.value = false
+    if (!ordersError.value && !classificationError.value) {
+      isChangesRefreshDone.value = true
+      window.setTimeout(() => { isChangesRefreshDone.value = false }, 1600)
+    }
   }
 }
 
@@ -2673,50 +2666,14 @@ onBeforeUnmount(() => {
 
     <main class="page-main">
       <section v-if="activePage === 'changes'" class="changes-page">
-        <div class="changes-topbar">
-          <div class="select-field">
-            <span>Распоряжения</span>
-            <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-              <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                <span>{{ selectedOrderName() }}</span>
-                <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                  <button
-                    v-for="order in orders"
-                    :key="order.id"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': order.id === selectedOrderId }"
-                    type="button"
-                    @click="selectOrder(order)"
-                  >
-                    {{ order.name }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <div class="changes-refresh-panel">
-            <span>Последнее обновление: {{ formatOrderDateTime(changesPageUpdatedAt()) }}</span>
-            <button type="button" :disabled="isChangesRefreshing" @click="refreshChangesPage">
-              <RefreshCw :class="{ 'is-spinning': isChangesRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              {{ isChangesRefreshing ? 'Обновление…' : 'Обновить' }}
-            </button>
-          </div>
-        </div>
-
         <section class="summary-grid" aria-label="Сводка изменений">
-          <article class="summary-card summary-card--added">
+          <article class="summary-card summary-card--changed">
             <div class="summary-card__icon" aria-hidden="true">
-              <Layers3 :size="34" :stroke-width="1.8" />
+              <Repeat2 :size="34" :stroke-width="1.8" />
             </div>
             <div class="summary-card__content">
-              <span>Добавлено систем</span>
-              <strong>{{ classificationStats.addedSystems }}</strong>
-              <small>{{ addedSystemsHint() }}</small>
+              <span>Изменения в классификации</span>
+              <strong>{{ classificationStats.classificationChanges }}</strong>
             </div>
           </article>
 
@@ -2735,14 +2692,13 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <article class="summary-card summary-card--changed">
+          <article class="summary-card summary-card--added">
             <div class="summary-card__icon" aria-hidden="true">
-              <Repeat2 :size="34" :stroke-width="1.8" />
+              <Layers3 :size="34" :stroke-width="1.8" />
             </div>
             <div class="summary-card__content">
-              <span>Изменения в классификации</span>
-              <strong>{{ classificationStats.classificationChanges }}</strong>
-              <small>{{ classificationStats.classificationChanges ? 'Класс систем изменён' : 'Нет изменений' }}</small>
+              <span>Добавлено систем</span>
+              <strong>{{ classificationStats.addedSystems }}</strong>
             </div>
           </article>
         </section>
@@ -2760,6 +2716,39 @@ onBeforeUnmount(() => {
                 <h2>Фильтры</h2>
               </div>
             </div>
+            <div class="changes-filters__header-actions">
+              <div class="select-field">
+                <span>Распоряжения</span>
+                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
+                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
+                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    <span>{{ selectedOrderName() }}</span>
+                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  </button>
+                  <Transition name="select-menu">
+                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
+                      <button
+                        v-for="order in orders"
+                        :key="order.id"
+                        class="custom-select__option"
+                        :class="{ 'is-selected': order.id === selectedOrderId }"
+                        type="button"
+                        @click="selectOrder(order)"
+                      >
+                        {{ order.name }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
+              <div class="changes-refresh-panel">
+                <button type="button" :class="{ 'is-success': isChangesRefreshDone }" :disabled="isChangesRefreshing" @click="refreshChangesPage">
+                  <CircleCheck v-if="isChangesRefreshDone" :size="18" :stroke-width="1.9" aria-hidden="true" />
+                  <RefreshCw v-else :class="{ 'is-spinning': isChangesRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  {{ isChangesRefreshing ? 'Обновление…' : isChangesRefreshDone ? 'Обновлено' : 'Обновить' }}
+                </button>
+              </div>
+            </div>
           </header>
 
           <div class="changes-filters__group changes-filters__construction">
@@ -2773,7 +2762,7 @@ onBeforeUnmount(() => {
                 type="button"
                 @click="selectConstructionType(type.name)"
               >
-                <span>{{ type.name }}</span>
+                <span>{{ type.label }}</span>
                 <strong>{{ type.count }}</strong>
               </button>
             </div>
@@ -2945,7 +2934,6 @@ onBeforeUnmount(() => {
             <label>
               <span>Строк на странице</span>
               <select v-model="classificationPageSize" @change="changeClassificationPageSize">
-                <option value="20">20</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
                 <option value="all">Все</option>
@@ -2988,7 +2976,6 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="changes-refresh-panel">
-            <span>Последнее обновление: {{ formatOrderDateTime(systemsPageUpdatedAt()) }}</span>
             <button type="button" :disabled="isSystemsRefreshing" @click="refreshSystemsPage">
               <RefreshCw :class="{ 'is-spinning': isSystemsRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
               {{ isSystemsRefreshing ? 'Обновление…' : 'Обновить' }}
