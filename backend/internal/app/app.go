@@ -43,7 +43,7 @@ func Run(cfg config.Config) error {
 	defer stopScheduler()
 	go navParserService.RunScheduler(schedulerCtx)
 	orderRepo := repository.NewOrderRepository(database)
-	orderService := service.NewOrderService(orderRepo)
+	orderService := service.NewOrderService(orderRepo, classificationService, systemCatalogService)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
