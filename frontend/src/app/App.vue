@@ -244,7 +244,6 @@ const comparisonOrderIds = ref<number[]>([])
 const comparisonCatalogByOrder = ref<Record<number, SystemDocumentRow[]>>({})
 const comparisonPendingIds = ref<number[]>([])
 const attachmentPendingIds = ref<number[]>([])
-const comparisonAllOrders = ref(true)
 const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
 const comparisonOnlyDifferences = ref(false)
@@ -2346,7 +2345,7 @@ async function toggleSystemComparison(row: SystemDocumentRow, event: Event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         selected,
-        allOrders: comparisonAllOrders.value,
+        allOrders: true,
         systems: [{ code: row.code, systemName: row.systemName }],
       }),
     })
@@ -2358,11 +2357,7 @@ async function toggleSystemComparison(row: SystemDocumentRow, event: Event) {
     if (documentRow) {
       documentRow.comparisonSelected = selected
     }
-    if (comparisonAllOrders.value) {
-      await loadComparisonCatalogs()
-    } else if (comparisonOrderIds.value.includes(row.orderId)) {
-      await loadComparisonCatalog(row.orderId)
-    }
+    await loadComparisonCatalogs()
   } catch (error) {
     row.comparisonSelected = previous
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось сохранить выбор для сравнения'
@@ -2388,7 +2383,7 @@ async function toggleAllSystemComparisons(event: Event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         selected,
-        allOrders: comparisonAllOrders.value,
+        allOrders: true,
         systems: rows.map((row) => ({ code: row.code, systemName: row.systemName })),
       }),
     })
@@ -3216,22 +3211,6 @@ onBeforeUnmount(() => {
               <span aria-hidden="true" />
               <strong>Выбрать все</strong>
             </label>
-            <div class="custom-select" :class="{ 'is-open': openedSelect === 'comparison-scope' }">
-              <button class="custom-select__button" type="button" aria-label="Область применения выбора" :disabled="isBulkComparisonUpdating" @click.stop="toggleSelect('comparison-scope')">
-                <span>{{ comparisonAllOrders ? 'Все распоряжения' : 'Текущее распоряжение' }}</span>
-                <i aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'comparison-scope'" class="custom-select__menu">
-                  <button class="custom-select__option" :class="{ 'is-selected': !comparisonAllOrders }" type="button" @click="comparisonAllOrders = false; openedSelect = null">
-                    Текущее распоряжение
-                  </button>
-                  <button class="custom-select__option" :class="{ 'is-selected': comparisonAllOrders }" type="button" @click="comparisonAllOrders = true; openedSelect = null">
-                    Все распоряжения
-                  </button>
-                </div>
-              </Transition>
-            </div>
           </div>
 
         </section>
