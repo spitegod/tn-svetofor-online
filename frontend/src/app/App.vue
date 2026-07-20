@@ -2896,12 +2896,22 @@ onBeforeUnmount(() => {
               </tr>
               <tr v-for="row in visibleClassificationRows()" :key="row.id" tabindex="-1">
                 <td class="changes-system-cell">
-                  <a v-if="row.systemUrl" class="changes-system-link" :href="row.systemUrl" target="_blank" rel="noreferrer">
-                    <span>{{ row.systemName }}</span>
-                    <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
-                  </a>
-                  <span v-else class="changes-system-name">{{ row.systemName }}</span>
-                  <small v-if="row.constructionType === 'Тип не присвоен'" class="construction-type-status">Тип не присвоен</small>
+                  <div class="changes-system-title">
+                    <a v-if="row.systemUrl" class="changes-system-link" :href="row.systemUrl" target="_blank" rel="noreferrer">
+                      <span>{{ row.systemName }}</span>
+                      <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
+                    </a>
+                    <span v-else class="changes-system-name">{{ row.systemName }}</span>
+                    <span
+                      v-if="row.constructionType === 'Тип не присвоен'"
+                      class="construction-type-info"
+                      tabindex="0"
+                      aria-label="Для данной системы параметр Тип строительства не был найден на nav.tn.ru"
+                    >
+                      <Info :size="13" :stroke-width="2.1" aria-hidden="true" />
+                      <span class="construction-type-info__tooltip" role="tooltip">Для данной системы параметр «Тип строительства» не был найден на nav.tn.ru</span>
+                    </span>
+                  </div>
                 </td>
                 <td :class="`changes-status-cell changes-status-cell--${classModifier(row.classBefore) || 'neutral'}`">
                   <span :class="`changes-status changes-status--${classModifier(row.classBefore) || 'neutral'}`">
