@@ -318,7 +318,7 @@ const settingsSystemCatalogPageSize = ref('10')
 const settingsSystemCatalogPage = ref(1)
 const isSettingsSystemCatalogUnlocked = ref(false)
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
-const systemDocumentPageSize = ref('20')
+const systemDocumentPageSize = ref('50')
 const systemDocumentPage = ref(1)
 const systemsConstructionTypes = computed(() => constructionTypes.map((name) => ({
   name,
@@ -3300,7 +3300,6 @@ onBeforeUnmount(() => {
             <label>
               <span>Строк на странице</span>
               <select v-model="systemDocumentPageSize" @change="changeSystemDocumentPageSize">
-                <option value="20">20</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
                 <option value="all">Все</option>
@@ -4743,7 +4742,6 @@ onBeforeUnmount(() => {
 
                 <article v-for="row in systemHistoryRows.slice(0, 1)" :key="`history-current-${row.id}`" class="history-entry history-entry--current">
                   <div class="history-entry__order">
-                    <span>Текущая версия</span>
                     <strong>{{ row.orderName }}</strong>
                   </div>
                   <p :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</p>
@@ -4754,7 +4752,10 @@ onBeforeUnmount(() => {
                     <span>{{ row.attachmentName }}</span>
                     <ExternalLink :size="17" :stroke-width="1.8" aria-hidden="true" />
                   </a>
-                  <span v-else class="history-document history-document--empty">Документ не прикреплён</span>
+                  <span v-else class="history-document history-document--empty">
+                    <span class="history-document__empty-icon" aria-hidden="true"><img :src="genericFileIcon" alt="" /></span>
+                    <span>Документ не прикреплён</span>
+                  </span>
                 </article>
               </section>
 
@@ -4784,7 +4785,10 @@ onBeforeUnmount(() => {
                         <span>{{ row.attachmentName }}</span>
                         <ExternalLink :size="17" :stroke-width="1.8" aria-hidden="true" />
                       </a>
-                      <span v-else class="history-document history-document--empty">Документ не прикреплён</span>
+                      <span v-else class="history-document history-document--empty">
+                        <span class="history-document__empty-icon" aria-hidden="true"><img :src="genericFileIcon" alt="" /></span>
+                        <span>Документ не прикреплён</span>
+                      </span>
                     </article>
                   </div>
                 </section>
