@@ -396,6 +396,11 @@ const activeClassificationPageFilterCount = computed(() => [
   selectedSystemTypeSlug.value !== '',
 ].filter(Boolean).length)
 const hasActiveClassificationPageFilters = computed(() => activeClassificationPageFilterCount.value > 0)
+const classificationClassPriority: Record<string, number> = {
+  'Рекомендованная': 0,
+  'Разрешенная': 1,
+  'Запрещенная': 2,
+}
 const classificationSystems = computed(() => {
   const query = classificationCatalogSearch.value.trim().toLocaleLowerCase('ru-RU')
   const selectedFilters = Object.entries(selectedClassificationFilters.value)
@@ -408,7 +413,14 @@ const classificationSystems = computed(() => {
     )
     return matchesSearch && matchesFilters
   })
-  return [...systems].sort((left, right) => left.systemName.localeCompare(right.systemName, 'ru'))
+  return [...systems].sort((left, right) => {
+    const classDifference =
+      (classificationClassPriority[left.systemClass] ?? Number.MAX_SAFE_INTEGER) -
+      (classificationClassPriority[right.systemClass] ?? Number.MAX_SAFE_INTEGER)
+
+    if (classDifference !== 0) return classDifference
+    return left.systemName.localeCompare(right.systemName, 'ru')
+  })
 })
 const classificationEmptyMessage = computed(() => {
   if (classificationCatalogRows.value.length === 0) {
@@ -3325,50 +3337,38 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activePage === 'classification'" class="classification-page">
-        <div class="classification-topline classification-topline--compact">
-          <div class="select-field">
-            <span>Распоряжение</span>
-            <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-              <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                <span>{{ selectedOrderName() }}</span>
-                <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                  <button
-                    v-for="order in orders"
-                    :key="order.id"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': order.id === selectedOrderId }"
-                    type="button"
-                    @click="selectOrder(order)"
-                  >
-                    {{ order.name }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <div class="classification-found">
-            <span class="classification-found__icon" aria-hidden="true">
-              <Layers3 :size="24" :stroke-width="1.8" />
-            </span>
-            <span>
-              <small>Найдено систем</small>
-              <strong>{{ classificationSystems.length }}</strong>
-              <em>{{ isClassificationSearchPending ? 'Обновляем результаты…' : 'по выбранным критериям' }}</em>
-            </span>
-          </div>
-        </div>
-
         <section class="changes-filters classification-page-filters" aria-label="Основные параметры классификации">
           <header class="changes-filters__header">
             <div class="changes-filters__heading">
               <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
               <div>
                 <h2>Основные параметры</h2>
+              </div>
+            </div>
+            <div class="changes-filters__header-actions">
+              <div class="select-field">
+                <span>Распоряжение</span>
+                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
+                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
+                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    <span>{{ selectedOrderName() }}</span>
+                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  </button>
+                  <Transition name="select-menu">
+                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
+                      <button
+                        v-for="order in orders"
+                        :key="order.id"
+                        class="custom-select__option"
+                        :class="{ 'is-selected': order.id === selectedOrderId }"
+                        type="button"
+                        @click="selectOrder(order)"
+                      >
+                        {{ order.name }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
               </div>
             </div>
           </header>
