@@ -386,8 +386,15 @@ const classificationFilterGroups = computed(() => {
 })
 const visibleClassificationFilterGroups = computed(() => {
   const query = classificationFilterSearch.value.trim().toLocaleLowerCase('ru-RU')
-  if (!query) return classificationFilterGroups.value
-  return classificationFilterGroups.value.filter((name) => name.toLocaleLowerCase('ru-RU').includes(query))
+  const groups = query
+    ? classificationFilterGroups.value.filter((name) => name.toLocaleLowerCase('ru-RU').includes(query))
+    : classificationFilterGroups.value
+
+  return [...groups].sort((left, right) => {
+    const leftSelected = Boolean(selectedClassificationFilters.value[left])
+    const rightSelected = Boolean(selectedClassificationFilters.value[right])
+    return Number(rightSelected) - Number(leftSelected)
+  })
 })
 const selectedClassificationFilterCount = computed(() => Object.keys(selectedClassificationFilters.value).length)
 const activeClassificationPageFilterCount = computed(() => [
@@ -1962,65 +1969,6 @@ function matchesSelectedClassificationFilters(system: SystemCatalogRow, excluded
 
 function toggleClassificationFilter(name: string) {
   openedClassificationFilter.value = openedClassificationFilter.value === name ? null : name
-}
-
-const classificationFilterAnimations = new WeakMap<HTMLElement, Animation>()
-
-function runClassificationFilterAnimation(
-  element: Element,
-  keyframes: Keyframe[],
-  done: () => void,
-  keepExpanded: boolean,
-) {
-  const panel = element as HTMLElement
-  classificationFilterAnimations.get(panel)?.cancel()
-
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    done()
-    return
-  }
-
-  panel.style.overflow = 'hidden'
-  const animation = panel.animate(keyframes, {
-    duration: 260,
-    easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-  })
-  classificationFilterAnimations.set(panel, animation)
-
-  animation.addEventListener('finish', () => {
-    classificationFilterAnimations.delete(panel)
-    if (keepExpanded) {
-      panel.style.removeProperty('height')
-      panel.style.removeProperty('overflow')
-      panel.style.removeProperty('opacity')
-      panel.style.removeProperty('transform')
-    }
-    done()
-  }, { once: true })
-}
-
-function expandClassificationFilter(element: Element, done: () => void) {
-  const panel = element as HTMLElement
-  const targetHeight = panel.scrollHeight
-  runClassificationFilterAnimation(panel, [
-    { height: '0px', opacity: 0, transform: 'translateY(-5px)' },
-    { height: `${targetHeight}px`, opacity: 1, transform: 'translateY(0)' },
-  ], done, true)
-}
-
-function collapseClassificationFilter(element: Element, done: () => void) {
-  const panel = element as HTMLElement
-  const currentHeight = panel.getBoundingClientRect().height
-  runClassificationFilterAnimation(panel, [
-    { height: `${currentHeight}px`, opacity: 1, transform: 'translateY(0)' },
-    { height: '0px', opacity: 0, transform: 'translateY(-5px)' },
-  ], done, false)
-}
-
-function cancelClassificationFilterAnimation(element: Element) {
-  const panel = element as HTMLElement
-  classificationFilterAnimations.get(panel)?.cancel()
-  classificationFilterAnimations.delete(panel)
 }
 
 function selectClassificationFilter(name: string, value: string) {
@@ -3684,13 +3632,7 @@ onBeforeUnmount(() => {
                   </span>
                   <i aria-hidden="true" />
                 </button>
-                <Transition
-                  :css="false"
-                  @enter="expandClassificationFilter"
-                  @leave="collapseClassificationFilter"
-                  @enter-cancelled="cancelClassificationFilterAnimation"
-                  @leave-cancelled="cancelClassificationFilterAnimation"
-                >
+                <Transition name="classification-filter-options">
                   <div v-if="openedClassificationFilter === filter" class="classification-sidebar__options-shell">
                     <div class="classification-sidebar__options">
                       <button type="button" :class="{ 'is-selected': !selectedClassificationFilters[filter] }" @click="selectClassificationFilter(filter, '')">
