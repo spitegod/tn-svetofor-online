@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("GET /api/health", health)
 	mux.HandleFunc("GET /api/orders", router.listOrders)
 	mux.HandleFunc("POST /api/orders", router.createOrder)
+	mux.HandleFunc("POST /api/orders/import", router.importOrderWorkbook)
 	mux.HandleFunc("PATCH /api/orders/{id}", router.updateOrder)
 	mux.HandleFunc("DELETE /api/orders/{id}", router.deleteOrder)
 	mux.HandleFunc("GET /api/classification-changes", router.listClassificationChanges)
@@ -358,6 +360,35 @@ func (r *Router) createOrder(w http.ResponseWriter, request *http.Request) {
 	}
 
 	order, err := r.orders.Create(request.Context(), payload.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, order)
+}
+
+func (r *Router) importOrderWorkbook(w http.ResponseWriter, request *http.Request) {
+	if err := request.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("parse multipart form: %w", err))
+		return
+	}
+
+	file, header, err := request.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("read uploaded file: %w", err))
+		return
+	}
+	defer file.Close()
+
+	fileName := path.Base(strings.ReplaceAll(header.Filename, "\\", "/"))
+	if !strings.EqualFold(path.Ext(fileName), ".xlsx") {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("order workbook must be an XLSX file"))
+		return
+	}
+	orderName := strings.TrimSuffix(fileName, path.Ext(fileName))
+
+	order, err := r.orders.ImportWorkbook(request.Context(), orderName, file)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

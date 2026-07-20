@@ -254,6 +254,7 @@ const comparisonPage = ref(1)
 const isComparisonLoading = ref(true)
 const comparisonError = ref('')
 const isOrdersLoading = ref(true)
+const isOrderWorkbookImporting = ref(false)
 const ordersError = ref('')
 const settingsOrderMenuId = ref<number | null>(null)
 const orderRenameTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
@@ -275,6 +276,7 @@ const draggedComparisonOrderId = ref<number | null>(null)
 const comparisonDropIndex = ref<number | null>(null)
 const importFileInput = ref<HTMLInputElement | null>(null)
 const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
+const orderWorkbookInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
 const classificationPageSize = ref('20')
 const classificationPage = ref(1)
@@ -749,6 +751,44 @@ async function createOrder() {
   orders.value = [order, ...orders.value]
   selectedOrderId.value = order.id
   await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
+}
+
+function openOrderWorkbookImport() {
+  orderWorkbookInput.value?.click()
+}
+
+async function importOrderWorkbook(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) {
+    return
+  }
+
+  const formData = new FormData()
+  formData.append('file', file)
+  isOrderWorkbookImporting.value = true
+  ordersError.value = ''
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/orders/import`, {
+      method: 'POST',
+      body: formData,
+    })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      throw new Error(payload?.error ?? 'Не удалось импортировать распоряжение')
+    }
+
+    const order: Order = await response.json()
+    selectedOrderId.value = order.id
+    await loadOrders()
+    await selectOrder(orders.value.find((item) => item.id === order.id) ?? order)
+  } catch (error) {
+    ordersError.value = error instanceof Error ? error.message : 'Не удалось импортировать распоряжение'
+  } finally {
+    isOrderWorkbookImporting.value = false
+    input.value = ''
+  }
 }
 
 async function deleteOrder(order: Order) {
@@ -4135,10 +4175,23 @@ onBeforeUnmount(() => {
                 </span>
               </div>
             </div>
-            <button class="settings-create-order" type="button" @click="createOrder">
-              <Plus :size="18" :stroke-width="1.8" aria-hidden="true" />
-              Создать новую БД
-            </button>
+            <div class="settings-orders-actions">
+              <button class="settings-create-order settings-create-order--secondary" type="button" :disabled="isOrderWorkbookImporting" @click="createOrder">
+                <Plus :size="18" :stroke-width="1.8" aria-hidden="true" />
+                Создать вручную
+              </button>
+              <button class="settings-create-order" type="button" :disabled="isOrderWorkbookImporting" @click="openOrderWorkbookImport">
+                <CloudUpload :size="18" :stroke-width="1.8" aria-hidden="true" />
+                {{ isOrderWorkbookImporting ? 'Импорт...' : 'Импорт XLSX' }}
+              </button>
+              <input
+                ref="orderWorkbookInput"
+                class="visually-hidden-input"
+                type="file"
+                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                @change="importOrderWorkbook"
+              />
+            </div>
           </div>
 
           <div

@@ -69,10 +69,22 @@ func (s *SystemCatalogService) Import(ctx context.Context, orderID int64, file i
 	if sheetName == "" {
 		return model.SystemCatalogList{}, fmt.Errorf("excel file has no sheets")
 	}
+	rows, err := s.parseSheet(spreadsheet, sheetName)
+	if err != nil {
+		return model.SystemCatalogList{}, err
+	}
 
+	if err := s.repo.ReplaceAll(ctx, orderID, rows); err != nil {
+		return model.SystemCatalogList{}, err
+	}
+
+	return s.List(ctx, model.SystemCatalogFilter{OrderID: orderID})
+}
+
+func (s *SystemCatalogService) parseSheet(spreadsheet *excelize.File, sheetName string) ([]model.SystemCatalogRow, error) {
 	excelRows, err := spreadsheet.GetRows(sheetName)
 	if err != nil {
-		return model.SystemCatalogList{}, fmt.Errorf("read excel rows: %w", err)
+		return nil, fmt.Errorf("read system catalog sheet %q: %w", sheetName, err)
 	}
 
 	rows := make([]model.SystemCatalogRow, 0, len(excelRows))
@@ -85,7 +97,7 @@ func (s *SystemCatalogService) Import(ctx context.Context, orderID int64, file i
 		systemName := normalizeCell(excelRow[1])
 		systemClass := normalizeStatus(excelRow[2])
 		curator := normalizeCell(excelRow[3])
-		if code == "" || systemName == "" || systemClass == "" {
+		if systemName == "" || systemClass == "" {
 			continue
 		}
 
@@ -99,14 +111,10 @@ func (s *SystemCatalogService) Import(ctx context.Context, orderID int64, file i
 	}
 
 	if len(rows) == 0 {
-		return model.SystemCatalogList{}, fmt.Errorf("excel file has no system catalog rows")
+		return nil, fmt.Errorf("sheet %q has no system catalog rows", sheetName)
 	}
 
-	if err := s.repo.ReplaceAll(ctx, orderID, rows); err != nil {
-		return model.SystemCatalogList{}, err
-	}
-
-	return s.List(ctx, model.SystemCatalogFilter{OrderID: orderID})
+	return rows, nil
 }
 
 func (s *SystemCatalogService) Update(ctx context.Context, id int64, orderID int64, row model.SystemCatalogRow) (model.SystemCatalogRow, error) {
@@ -117,8 +125,8 @@ func (s *SystemCatalogService) Update(ctx context.Context, id int64, orderID int
 	row.SystemName = normalizeCell(row.SystemName)
 	row.SystemClass = normalizeStatus(row.SystemClass)
 	row.Curator = normalizeCell(row.Curator)
-	if row.Code == "" || row.SystemName == "" {
-		return model.SystemCatalogRow{}, fmt.Errorf("code and system name cannot be empty")
+	if row.SystemName == "" {
+		return model.SystemCatalogRow{}, fmt.Errorf("system name cannot be empty")
 	}
 	if !validStatus(row.SystemClass, false) {
 		return model.SystemCatalogRow{}, fmt.Errorf("invalid system class")
