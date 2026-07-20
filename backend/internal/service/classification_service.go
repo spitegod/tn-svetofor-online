@@ -111,10 +111,22 @@ func (s *ClassificationService) Import(ctx context.Context, orderID int64, file 
 	if sheetName == "" {
 		return model.ClassificationList{}, fmt.Errorf("excel file has no sheets")
 	}
+	rows, err := s.parseSheet(ctx, spreadsheet, sheetName)
+	if err != nil {
+		return model.ClassificationList{}, err
+	}
 
+	if err := s.repo.ReplaceAll(ctx, orderID, rows); err != nil {
+		return model.ClassificationList{}, err
+	}
+
+	return s.List(ctx, model.ClassificationFilter{OrderID: orderID})
+}
+
+func (s *ClassificationService) parseSheet(ctx context.Context, spreadsheet *excelize.File, sheetName string) ([]model.ClassificationChange, error) {
 	excelRows, err := spreadsheet.GetRows(sheetName)
 	if err != nil {
-		return model.ClassificationList{}, fmt.Errorf("read excel rows: %w", err)
+		return nil, fmt.Errorf("read classification sheet %q: %w", sheetName, err)
 	}
 
 	rows := make([]model.ClassificationChange, 0, len(excelRows))
@@ -140,16 +152,11 @@ func (s *ClassificationService) Import(ctx context.Context, orderID int64, file 
 	}
 
 	if len(rows) == 0 {
-		return model.ClassificationList{}, fmt.Errorf("excel file has no classification rows")
+		return nil, fmt.Errorf("sheet %q has no classification rows", sheetName)
 	}
 
 	s.resolveSystemURLs(ctx, rows)
-
-	if err := s.repo.ReplaceAll(ctx, orderID, rows); err != nil {
-		return model.ClassificationList{}, err
-	}
-
-	return s.List(ctx, model.ClassificationFilter{OrderID: orderID})
+	return rows, nil
 }
 
 func (s *ClassificationService) Update(ctx context.Context, id int64, orderID int64, row model.ClassificationChange) (model.ClassificationChange, error) {
