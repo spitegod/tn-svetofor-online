@@ -3205,7 +3205,14 @@ onBeforeUnmount(() => {
             </span>
             <div class="comparison-table-controls__heading">
               <strong>Добавление в сравнение</strong>
-              <span>Отметьте нужные системы в таблице</span>
+              <span
+                class="comparison-table-controls__help"
+                tabindex="0"
+                aria-label="Отметьте нужные системы в таблице для сравнения изменений класса системы в зависимости от версии распоряжения"
+              >
+                <Info :size="15" :stroke-width="2" aria-hidden="true" />
+                <span role="tooltip">Отметьте нужные системы в таблице для сравнения изменений класса системы в зависимости от версии распоряжения.</span>
+              </span>
             </div>
           </div>
           <div class="comparison-table-controls__actions">
@@ -3256,7 +3263,9 @@ onBeforeUnmount(() => {
                 <td class="empty-table-cell" colspan="5">В таблице 3 этого распоряжения пока нет систем</td>
               </tr>
               <tr v-for="row in visibleSystemDocumentRows()" :key="row.id" tabindex="-1">
-                <td class="systems-code-cell"><span>{{ row.code }}</span></td>
+                <td class="systems-code-cell">
+                  <span :class="{ 'systems-code-cell__empty': !row.code.trim() }">{{ row.code.trim() || 'Не присвоен' }}</span>
+                </td>
                 <td class="systems-name-cell">
                   <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
                     {{ row.systemName }}
