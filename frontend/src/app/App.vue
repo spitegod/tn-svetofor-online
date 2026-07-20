@@ -357,6 +357,7 @@ const systemTypes = computed(() => [{ slug: '', name: 'Все системы', i
     matchesConstructionType(system) && matchesSystemType(system, type),
   ).length,
 })))
+const visibleSystemTypes = computed(() => systemTypes.value.filter((type) => !type.slug || type.count > 0))
 const selectedSystemType = computed(() =>
   systemTypes.value.find((type) => type.slug === selectedSystemTypeSlug.value) ?? systemTypes.value[0],
 )
@@ -456,6 +457,7 @@ const isSystemDocumentLoading = ref(true)
 const systemFilterRequestCount = ref(0)
 const isSystemFiltering = computed(() => systemFilterRequestCount.value > 0)
 const isSystemsRefreshing = ref(false)
+const isSystemsRefreshDone = ref(false)
 const systemsLastRefreshedAt = ref('')
 const systemCatalogError = ref('')
 const activeSystemFilterCount = computed(() => [
@@ -555,6 +557,8 @@ async function refreshSystemsPage() {
   if (isSystemsRefreshing.value) {
     return
   }
+  const startedAt = performance.now()
+  isSystemsRefreshDone.value = false
   isSystemsRefreshing.value = true
   try {
     await Promise.all([loadSystemCatalog(true), loadSystemDocuments(true)])
@@ -562,7 +566,15 @@ async function refreshSystemsPage() {
       systemsLastRefreshedAt.value = new Date().toISOString()
     }
   } finally {
+    const remainingAnimationTime = Math.max(0, 1000 - (performance.now() - startedAt))
+    if (remainingAnimationTime > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, remainingAnimationTime))
+    }
     isSystemsRefreshing.value = false
+    if (!systemCatalogError.value) {
+      isSystemsRefreshDone.value = true
+      window.setTimeout(() => { isSystemsRefreshDone.value = false }, 1600)
+    }
   }
 }
 
@@ -2959,40 +2971,6 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activePage === 'systems'" class="systems-page">
-        <div class="changes-topbar systems-topbar">
-          <div class="select-field">
-            <span>Распоряжение</span>
-            <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-              <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                <span>{{ selectedOrderName() }}</span>
-                <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                  <button
-                    v-for="order in orders"
-                    :key="order.id"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': order.id === selectedOrderId }"
-                    type="button"
-                    @click="selectOrder(order)"
-                  >
-                    {{ order.name }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <div class="changes-refresh-panel">
-            <button type="button" :disabled="isSystemsRefreshing" @click="refreshSystemsPage">
-              <RefreshCw :class="{ 'is-spinning': isSystemsRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              {{ isSystemsRefreshing ? 'Обновление…' : 'Обновить' }}
-            </button>
-          </div>
-        </div>
-
         <section class="systems-summary" aria-label="Сводка систем">
           <article class="systems-metric-card">
             <span class="systems-metric-card__accent" aria-hidden="true" />
@@ -3045,6 +3023,39 @@ onBeforeUnmount(() => {
                 <h2>Фильтры</h2>
               </div>
             </div>
+            <div class="changes-filters__header-actions">
+              <div class="select-field">
+                <span>Распоряжение</span>
+                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
+                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
+                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    <span>{{ selectedOrderName() }}</span>
+                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  </button>
+                  <Transition name="select-menu">
+                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
+                      <button
+                        v-for="order in orders"
+                        :key="order.id"
+                        class="custom-select__option"
+                        :class="{ 'is-selected': order.id === selectedOrderId }"
+                        type="button"
+                        @click="selectOrder(order)"
+                      >
+                        {{ order.name }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
+              <div class="changes-refresh-panel">
+                <button type="button" :class="{ 'is-success': isSystemsRefreshDone }" :disabled="isSystemsRefreshing" @click="refreshSystemsPage">
+                  <CircleCheck v-if="isSystemsRefreshDone" :size="18" :stroke-width="1.9" aria-hidden="true" />
+                  <RefreshCw v-else :class="{ 'is-spinning': isSystemsRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  {{ isSystemsRefreshing ? 'Обновление…' : isSystemsRefreshDone ? 'Обновлено' : 'Обновить' }}
+                </button>
+              </div>
+            </div>
           </header>
 
           <div class="changes-filters__group systems-filters__construction">
@@ -3081,7 +3092,7 @@ onBeforeUnmount(() => {
                 <div v-if="isSystemTypesOpen" class="system-type-body">
                   <div class="system-type-grid">
                     <button
-                      v-for="type in systemTypes"
+                      v-for="type in visibleSystemTypes"
                       :key="type.name"
                       class="system-type-card"
                       :class="{ 'is-active': type.name === selectedSystemType.name }"
@@ -3388,7 +3399,7 @@ onBeforeUnmount(() => {
                 <div v-if="isSystemTypesOpen" class="system-type-body">
                   <div class="system-type-grid">
                     <button
-                      v-for="type in systemTypes"
+                      v-for="type in visibleSystemTypes"
                       :key="type.name"
                       class="system-type-card"
                       :class="{ 'is-active': type.name === selectedSystemType.name }"
