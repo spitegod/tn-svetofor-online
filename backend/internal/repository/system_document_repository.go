@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"tn/backend/internal/apperror"
 	"tn/backend/internal/model"
 )
 
@@ -21,8 +22,8 @@ func (r *SystemDocumentRepository) List(ctx context.Context, filter model.System
 	clauses := []string{"d.order_id = $1"}
 	args := []any{filter.OrderID}
 	if filter.Query != "" {
-		args = append(args, "%"+strings.ToLower(filter.Query)+"%")
-		clauses = append(clauses, fmt.Sprintf("LOWER(s.system_name) LIKE $%d", len(args)))
+		args = append(args, containsLikePattern(filter.Query))
+		clauses = append(clauses, fmt.Sprintf("LOWER(s.system_name) LIKE $%d ESCAPE '\\'", len(args)))
 	}
 	if filter.SystemClass != "" {
 		args = append(args, filter.SystemClass)
@@ -85,7 +86,9 @@ func (r *SystemDocumentRepository) History(ctx context.Context, code string, sys
 		LEFT JOIN nav_systems nav
 			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g'))
 		JOIN orders o ON o.id = d.order_id
-		WHERE s.code = $1 AND s.system_name = $2
+		WHERE ($1 <> '' AND s.code = $1)
+			OR ($1 = '' AND LOWER(REGEXP_REPLACE(BTRIM(s.system_name), '\s+', ' ', 'g')) =
+				LOWER(REGEXP_REPLACE(BTRIM($2), '\s+', ' ', 'g')))
 		ORDER BY o.created_at DESC, o.id DESC
 	`, code, systemName)
 	if err != nil {
@@ -118,22 +121,20 @@ func (r *SystemDocumentRepository) loadCharacteristics(ctx context.Context, rows
 		return nil
 	}
 	bySystemKey := make(map[string][]*model.SystemDocumentRow, len(rows))
-	args := make([]any, 0, len(rows))
-	placeholders := make([]string, 0, len(rows))
+	keys := make([]string, 0, len(rows))
 	for index := range rows {
 		key := systemMetadataKey(rows[index].SystemName)
 		if _, exists := bySystemKey[key]; !exists {
-			args = append(args, key)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
+			keys = append(keys, key)
 		}
 		bySystemKey[key] = append(bySystemKey[key], &rows[index])
 	}
-	result, err := r.db.QueryContext(ctx, fmt.Sprintf(`
+	result, err := r.db.QueryContext(ctx, `
 		SELECT system_key, position, name, value
 		FROM nav_system_characteristics
-		WHERE system_key IN (%s)
+		WHERE system_key = ANY($1::TEXT[])
 		ORDER BY system_key, position
-	`, strings.Join(placeholders, ",")), args...)
+	`, keys)
 	if err != nil {
 		return fmt.Errorf("load system document characteristics: %w", err)
 	}
@@ -178,7 +179,7 @@ func (r *SystemDocumentRepository) UpdateComment(ctx context.Context, id int64, 
 		&row.CreatedAt, &row.UpdatedAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.SystemDocumentRow{}, fmt.Errorf("system document not found")
+			return model.SystemDocumentRow{}, apperror.New(apperror.NotFound, "system document not found")
 		}
 		return model.SystemDocumentRow{}, fmt.Errorf("update system document comment: %w", err)
 	}
@@ -203,7 +204,7 @@ func (r *SystemDocumentRepository) SaveAttachment(ctx context.Context, id int64,
 		return fmt.Errorf("check saved system document attachment: %w", err)
 	}
 	if affected == 0 {
-		return fmt.Errorf("system document not found")
+		return apperror.New(apperror.NotFound, "system document not found")
 	}
 	return nil
 }
@@ -217,7 +218,7 @@ func (r *SystemDocumentRepository) Attachment(ctx context.Context, id int64, ord
 	`, id, orderID).Scan(&attachment.Name, &attachment.ContentType, &attachment.Size, &attachment.Data)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.SystemDocumentAttachment{}, fmt.Errorf("attachment not found")
+			return model.SystemDocumentAttachment{}, apperror.New(apperror.NotFound, "attachment not found")
 		}
 		return model.SystemDocumentAttachment{}, fmt.Errorf("load system document attachment: %w", err)
 	}
@@ -242,7 +243,7 @@ func (r *SystemDocumentRepository) DeleteAttachment(ctx context.Context, id int6
 		return fmt.Errorf("check deleted system document attachment: %w", err)
 	}
 	if affected == 0 {
-		return fmt.Errorf("system document not found")
+		return apperror.New(apperror.NotFound, "system document not found")
 	}
 	return nil
 }
@@ -261,7 +262,7 @@ func (r *SystemDocumentRepository) UpdateComparison(ctx context.Context, id int6
 		return fmt.Errorf("check system document comparison selection: %w", err)
 	}
 	if affected == 0 {
-		return fmt.Errorf("system document not found")
+		return apperror.New(apperror.NotFound, "system document not found")
 	}
 	return nil
 }
@@ -291,33 +292,6 @@ func (r *SystemDocumentRepository) UpdateComparisonBulk(ctx context.Context, ord
 	)
 	if err != nil {
 		return fmt.Errorf("bulk update comparison selection: %w", err)
-	}
-	return nil
-}
-
-func (r *SystemDocumentRepository) Delete(ctx context.Context, id int64, orderID int64) error {
-	tx, err := r.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin delete system document: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	result, err := tx.ExecContext(ctx, `DELETE FROM system_documents WHERE id = $1 AND order_id = $2`, id, orderID)
-	if err != nil {
-		return fmt.Errorf("delete system document: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check deleted system document: %w", err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("system document not found")
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE orders SET updated_at = NOW() WHERE id = $1`, orderID); err != nil {
-		return fmt.Errorf("touch order after system document delete: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit system document delete: %w", err)
 	}
 	return nil
 }

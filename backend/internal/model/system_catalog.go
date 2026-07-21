@@ -84,14 +84,16 @@ type NavParserRun struct {
 }
 
 type NavParserSettings struct {
-	UpdateIntervalDays int        `json:"updateIntervalDays"`
-	WorkerCount        int        `json:"workerCount"`
-	RequestTimeoutSecs int        `json:"requestTimeoutSeconds"`
-	RetryAttempts      int        `json:"retryAttempts"`
-	RetryDelaySecs     int        `json:"retryDelaySeconds"`
-	FallbackSearch     bool       `json:"fallbackSearch"`
-	LastRunAt          *time.Time `json:"lastRunAt"`
-	NextRunAt          *time.Time `json:"nextRunAt"`
+	UpdateIntervalDays  int        `json:"updateIntervalDays"`
+	WorkerCount         int        `json:"workerCount"`
+	RequestTimeoutSecs  int        `json:"requestTimeoutSeconds"`
+	RetryAttempts       int        `json:"retryAttempts"`
+	RetryDelaySecs      int        `json:"retryDelaySeconds"`
+	FallbackSearch      bool       `json:"fallbackSearch"`
+	LastRunAt           *time.Time `json:"lastRunAt"`
+	LastAttemptAt       *time.Time `json:"lastAttemptAt"`
+	ConsecutiveFailures int        `json:"consecutiveFailures"`
+	NextRunAt           *time.Time `json:"nextRunAt"`
 }
 
 type SystemCatalogStats struct {

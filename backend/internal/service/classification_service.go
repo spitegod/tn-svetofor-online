@@ -5,27 +5,44 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"strings"
-	"sync"
-	"time"
 	"unicode/utf8"
 
+	"tn/backend/internal/apperror"
 	"tn/backend/internal/model"
-	"tn/backend/internal/repository"
 
 	"github.com/xuri/excelize/v2"
-	"golang.org/x/net/html"
 	"golang.org/x/text/encoding/charmap"
 )
 
 type ClassificationService struct {
-	repo       *repository.ClassificationRepository
-	httpClient *http.Client
+	repo classificationRepository
+}
+
+type classificationRepository interface {
+	List(context.Context, model.ClassificationFilter) ([]model.ClassificationChange, error)
+	Stats(context.Context, int64) (model.ClassificationStats, error)
+	Options(context.Context, string, int64) ([]string, error)
+	ReplaceAll(context.Context, int64, []model.ClassificationChange) error
+	Update(context.Context, int64, int64, model.ClassificationChange) (model.ClassificationChange, error)
 }
 
 const unassignedConstructionType = "Тип не присвоен"
+
+const (
+	maxImportedRows         = 100_000
+	maxImportedCellBytes    = 4_000
+	maxReportedImportErrors = 50
+	spreadsheetUnzipLimit   = 256 << 20
+	spreadsheetXMLSizeLimit = 64 << 20
+)
+
+func spreadsheetOpenOptions() excelize.Options {
+	return excelize.Options{
+		UnzipSizeLimit:    spreadsheetUnzipLimit,
+		UnzipXMLSizeLimit: spreadsheetXMLSizeLimit,
+	}
+}
 
 type knownNAVSystem struct {
 	URL              string
@@ -58,16 +75,14 @@ var knownNAVSystems = map[string]knownNAVSystem{
 	},
 }
 
-func NewClassificationService(repo *repository.ClassificationRepository) *ClassificationService {
-	return &ClassificationService{
-		repo: repo,
-		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
-		},
-	}
+func NewClassificationService(repo classificationRepository) *ClassificationService {
+	return &ClassificationService{repo: repo}
 }
 
 func (s *ClassificationService) List(ctx context.Context, filter model.ClassificationFilter) (model.ClassificationList, error) {
+	if err := validateClassificationFilter(filter); err != nil {
+		return model.ClassificationList{}, err
+	}
 	rows, err := s.repo.List(ctx, filter)
 	if err != nil {
 		return model.ClassificationList{}, err
@@ -101,19 +116,19 @@ func (s *ClassificationService) Import(ctx context.Context, orderID int64, file 
 		orderID = 1
 	}
 
-	spreadsheet, err := excelize.OpenReader(file)
+	spreadsheet, err := excelize.OpenReader(file, spreadsheetOpenOptions())
 	if err != nil {
-		return model.ClassificationList{}, fmt.Errorf("open excel file: %w", err)
+		return model.ClassificationList{}, apperror.Wrap(apperror.Validation, fmt.Errorf("open excel file: %w", err))
 	}
 	defer spreadsheet.Close()
 
 	sheetName := spreadsheet.GetSheetName(0)
 	if sheetName == "" {
-		return model.ClassificationList{}, fmt.Errorf("excel file has no sheets")
+		return model.ClassificationList{}, apperror.New(apperror.Validation, "excel file has no sheets")
 	}
 	rows, err := s.parseSheet(ctx, spreadsheet, sheetName)
 	if err != nil {
-		return model.ClassificationList{}, err
+		return model.ClassificationList{}, apperror.Wrap(apperror.Validation, err)
 	}
 
 	if err := s.repo.ReplaceAll(ctx, orderID, rows); err != nil {
@@ -128,54 +143,108 @@ func (s *ClassificationService) parseSheet(ctx context.Context, spreadsheet *exc
 	if err != nil {
 		return nil, fmt.Errorf("read classification sheet %q: %w", sheetName, err)
 	}
+	if len(excelRows) > maxImportedRows+2 {
+		return nil, fmt.Errorf("sheet %q exceeds the limit of %d data rows", sheetName, maxImportedRows)
+	}
 
 	rows := make([]model.ClassificationChange, 0, len(excelRows))
+	validationErrors := make([]string, 0)
+	validationErrorCount := 0
 	for index, excelRow := range excelRows {
-		if index < 2 || len(excelRow) < 3 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if index < 2 {
+			continue
+		}
+		if len(excelRow) < 3 {
+			if len(excelRow) > 0 && normalizeCell(strings.Join(excelRow, "")) != "" {
+				addImportValidationError(&validationErrors, &validationErrorCount, fmt.Sprintf("строка %d: ожидаются название, класс «было» и класс «стало»", index+1))
+			}
 			continue
 		}
 
 		systemName := normalizeCell(excelRow[0])
 		classBefore := normalizeStatus(excelRow[1])
 		classAfter := normalizeStatus(excelRow[2])
+		if systemName == "" && classBefore == "" && classAfter == "" {
+			continue
+		}
 		if systemName == "" || classBefore == "" || classAfter == "" {
+			addImportValidationError(&validationErrors, &validationErrorCount, fmt.Sprintf("строка %d: не заполнены обязательные ячейки", index+1))
+			continue
+		}
+		if !validStatus(classBefore, true) || !validStatus(classAfter, false) {
+			addImportValidationError(&validationErrors, &validationErrorCount, fmt.Sprintf("строка %d: недопустимый класс %q → %q", index+1, classBefore, classAfter))
+			continue
+		}
+		if len(systemName) > maxImportedCellBytes {
+			addImportValidationError(&validationErrors, &validationErrorCount, fmt.Sprintf("строка %d: название системы слишком длинное", index+1))
 			continue
 		}
 
-		rows = append(rows, model.ClassificationChange{
+		row := model.ClassificationChange{
 			Position:         len(rows) + 1,
 			SystemName:       systemName,
 			ConstructionType: unassignedConstructionType,
 			ClassBefore:      classBefore,
 			ClassAfter:       classAfter,
-		})
+		}
+		if known, found := knownNAVSystemData(systemName); found {
+			row.SystemURL = known.URL
+			row.ConstructionType = known.ConstructionType
+		}
+		rows = append(rows, row)
+	}
+	if validationErrorCount > 0 {
+		return nil, fmt.Errorf("ошибки в листе %q: %s", sheetName, formatImportValidationErrors(validationErrors, validationErrorCount))
 	}
 
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("sheet %q has no classification rows", sheetName)
 	}
 
-	s.resolveSystemURLs(ctx, rows)
 	return rows, nil
+}
+
+func addImportValidationError(errors *[]string, total *int, message string) {
+	(*total)++
+	if len(*errors) < maxReportedImportErrors {
+		*errors = append(*errors, message)
+	}
+}
+
+func formatImportValidationErrors(errors []string, total int) string {
+	message := strings.Join(errors, "; ")
+	if remaining := total - len(errors); remaining > 0 {
+		message += fmt.Sprintf("; и ещё %d ошибок", remaining)
+	}
+	return message
 }
 
 func (s *ClassificationService) Update(ctx context.Context, id int64, orderID int64, row model.ClassificationChange) (model.ClassificationChange, error) {
 	if id <= 0 || orderID <= 0 {
-		return model.ClassificationChange{}, fmt.Errorf("invalid classification change")
+		return model.ClassificationChange{}, apperror.New(apperror.Validation, "invalid classification change")
 	}
 	row.SystemName = normalizeCell(row.SystemName)
 	row.ClassBefore = normalizeStatus(row.ClassBefore)
 	row.ClassAfter = normalizeStatus(row.ClassAfter)
 	if row.SystemName == "" {
-		return model.ClassificationChange{}, fmt.Errorf("system name cannot be empty")
+		return model.ClassificationChange{}, apperror.New(apperror.Validation, "system name cannot be empty")
+	}
+	if len(row.SystemName) > maxImportedCellBytes {
+		return model.ClassificationChange{}, apperror.New(apperror.Validation, "system name is too long")
 	}
 	if !validStatus(row.ClassBefore, true) || !validStatus(row.ClassAfter, false) {
-		return model.ClassificationChange{}, fmt.Errorf("invalid classification status")
+		return model.ClassificationChange{}, apperror.New(apperror.Validation, "invalid classification status")
 	}
 	return s.repo.Update(ctx, id, orderID, row)
 }
 
 func (s *ClassificationService) Export(ctx context.Context, filter model.ClassificationFilter) ([]byte, error) {
+	if err := validateClassificationFilter(filter); err != nil {
+		return nil, err
+	}
 	rows, err := s.repo.List(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -222,6 +291,9 @@ func (s *ClassificationService) Export(ctx context.Context, filter model.Classif
 	_ = file.SetRowHeight(sheet, 2, 22)
 
 	for index, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		excelRow := index + 3
 		_ = file.SetCellValue(sheet, fmt.Sprintf("A%d", excelRow), row.SystemName)
 		_ = file.SetCellValue(sheet, fmt.Sprintf("B%d", excelRow), row.ClassBefore)
@@ -252,6 +324,19 @@ func (s *ClassificationService) Export(ctx context.Context, filter model.Classif
 	}
 
 	return buffer.Bytes(), nil
+}
+
+func validateClassificationFilter(filter model.ClassificationFilter) error {
+	if filter.ClassBefore != "" && !validStatus(filter.ClassBefore, true) {
+		return apperror.New(apperror.Validation, "invalid previous class filter")
+	}
+	if filter.ClassAfter != "" && !validStatus(filter.ClassAfter, false) {
+		return apperror.New(apperror.Validation, "invalid current class filter")
+	}
+	if filter.ConstructionType != "" && !validConstructionType(filter.ConstructionType) {
+		return apperror.New(apperror.Validation, "invalid construction type filter")
+	}
+	return nil
 }
 
 func normalizeCell(value string) string {
@@ -285,6 +370,19 @@ func validStatus(value string, allowNew bool) bool {
 	return value == "Рекомендованная" || value == "Разрешенная" || value == "Запрещенная"
 }
 
+func validConstructionType(value string) bool {
+	switch value {
+	case "Промышленное и гражданское строительство",
+		"Индивидуальное жилищное строительство",
+		"Транспортное и дорожное строительство",
+		"Специальные сооружения",
+		unassignedConstructionType:
+		return true
+	default:
+		return false
+	}
+}
+
 func repairMojibake(value string) string {
 	if !looksLikeMojibake(value) {
 		return value
@@ -311,106 +409,6 @@ func looksLikeMojibake(value string) bool {
 	}
 
 	return false
-}
-
-func (s *ClassificationService) resolveSystemURLs(ctx context.Context, rows []model.ClassificationChange) {
-	var wg sync.WaitGroup
-	guard := make(chan struct{}, 8)
-
-	for index := range rows {
-		wg.Add(1)
-		go func(rowIndex int) {
-			defer wg.Done()
-
-			select {
-			case guard <- struct{}{}:
-				defer func() { <-guard }()
-			case <-ctx.Done():
-				return
-			}
-
-			rows[rowIndex].SystemURL, rows[rowIndex].ConstructionType = s.resolveSystemData(ctx, rows[rowIndex].SystemName)
-		}(index)
-	}
-
-	wg.Wait()
-}
-
-func (s *ClassificationService) resolveSystemData(ctx context.Context, systemName string) (string, string) {
-	if systemURL, constructionType, found, err := s.repo.NavSystemData(ctx, systemName); err == nil && found {
-		if normalizedType := normalizeConstructionType(constructionType); normalizedType != unassignedConstructionType {
-			return systemURL, normalizedType
-		}
-	}
-	if system, found := knownNAVSystemData(systemName); found {
-		return system.URL, system.ConstructionType
-	}
-
-	searchURL := "https://nav.tn.ru/search/?q=" + url.QueryEscape(systemName)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, searchURL, nil)
-	if err != nil {
-		return "", unassignedConstructionType
-	}
-
-	request.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	response, err := s.httpClient.Do(request)
-	if err != nil {
-		return "", unassignedConstructionType
-	}
-	defer response.Body.Close()
-
-	if response.StatusCode != http.StatusOK {
-		return "", unassignedConstructionType
-	}
-
-	return systemDataFromSearch(response.Body, systemName)
-}
-
-func systemDataFromSearch(body io.Reader, systemName string) (string, string) {
-	document, err := html.Parse(io.LimitReader(body, 2*1024*1024))
-	if err != nil {
-		return "", unassignedConstructionType
-	}
-
-	wantedName := normalizeNAVLookupName(systemName)
-	for _, anchor := range findNodes(document, func(node *html.Node) bool {
-		return node.Type == html.ElementNode && node.Data == "a" && hasClass(node, "b-search-teaser__title")
-	}) {
-		if normalizeNAVLookupName(nodeText(anchor)) != wantedName {
-			continue
-		}
-
-		link, err := url.Parse(attribute(anchor, "href"))
-		if err != nil {
-			continue
-		}
-
-		absolute := (&url.URL{Scheme: "https", Host: "nav.tn.ru"}).ResolveReference(link)
-		if absolute.Hostname() != "nav.tn.ru" || !strings.HasPrefix(absolute.Path, "/systems/") {
-			continue
-		}
-
-		absolute.RawQuery = ""
-		absolute.Fragment = ""
-
-		constructionType := unassignedConstructionType
-		for parent := anchor.Parent; parent != nil; parent = parent.Parent {
-			if parent.Type != html.ElementNode || !hasClass(parent, "b-search-teaser") {
-				continue
-			}
-			segment := findNode(parent, func(node *html.Node) bool {
-				return node.Type == html.ElementNode && hasClass(node, "b-search-teaser__constr_segment")
-			})
-			if segment != nil {
-				constructionType = normalizeConstructionType(nodeText(segment))
-			}
-			break
-		}
-
-		return absolute.String(), constructionType
-	}
-
-	return "", unassignedConstructionType
 }
 
 func knownNAVSystemData(systemName string) (knownNAVSystem, bool) {

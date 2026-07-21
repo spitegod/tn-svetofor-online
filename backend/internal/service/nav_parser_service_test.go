@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"tn/backend/internal/model"
 
@@ -81,6 +84,18 @@ func TestResolveNavAssetURLRejectsExternalHost(t *testing.T) {
 	}
 }
 
+func TestDetectRasterImageRejectsSVG(t *testing.T) {
+	if _, ok := detectRasterImage([]byte(`<svg xmlns="http://www.w3.org/2000/svg"></svg>`)); ok {
+		t.Fatal("expected SVG to be rejected")
+	}
+}
+
+func TestDetectRasterImageAcceptsWebP(t *testing.T) {
+	if contentType, ok := detectRasterImage([]byte("RIFF1234WEBP")); !ok || contentType != "image/webp" {
+		t.Fatalf("detectRasterImage() = %q, %v", contentType, ok)
+	}
+}
+
 func TestParserSystemPercent(t *testing.T) {
 	tests := []struct {
 		processed int
@@ -96,5 +111,75 @@ func TestParserSystemPercent(t *testing.T) {
 		if got := parserSystemPercent(test.processed, test.total); got != test.want {
 			t.Errorf("parserSystemPercent(%d, %d) = %d, want %d", test.processed, test.total, got, test.want)
 		}
+	}
+}
+
+type navParserRepositoryStub struct {
+	mu       sync.Mutex
+	attempts int
+	runs     int
+}
+
+func (r *navParserRepositoryStub) AcquireNavParserLock(context.Context) (func(), bool, error) {
+	return func() {}, true, nil
+}
+func (r *navParserRepositoryStub) ParserRows(context.Context) ([]model.SystemCatalogRow, error) {
+	return nil, nil
+}
+func (r *navParserRepositoryStub) SaveParsed(context.Context, string, string, []model.SystemCharacteristic) error {
+	return nil
+}
+func (r *navParserRepositoryStub) ReplaceSystemTypes(context.Context, []model.SystemTypeOption) error {
+	return nil
+}
+func (r *navParserRepositoryStub) SystemTypes(context.Context) ([]model.SystemTypeOption, error) {
+	return nil, nil
+}
+func (r *navParserRepositoryStub) SystemTypeImage(context.Context, string) (model.SystemTypeImage, error) {
+	return model.SystemTypeImage{}, nil
+}
+func (r *navParserRepositoryStub) NavParserSettings(context.Context) (model.NavParserSettings, error) {
+	return model.NavParserSettings{UpdateIntervalDays: 7, WorkerCount: 1, RequestTimeoutSecs: 5, RetryAttempts: 1, RetryDelaySecs: 1}, nil
+}
+func (r *navParserRepositoryStub) UpdateNavParserSettings(_ context.Context, settings model.NavParserSettings) (model.NavParserSettings, error) {
+	return settings, nil
+}
+func (r *navParserRepositoryStub) MarkNavParserRun(context.Context) error {
+	r.mu.Lock()
+	r.runs++
+	r.mu.Unlock()
+	return nil
+}
+func (r *navParserRepositoryStub) MarkNavParserAttempt(context.Context) error {
+	r.mu.Lock()
+	r.attempts++
+	r.mu.Unlock()
+	return nil
+}
+func (r *navParserRepositoryStub) MarkNavParserFailure(context.Context) error { return nil }
+func (r *navParserRepositoryStub) SaveNavParserRun(context.Context, model.NavParserRun) error {
+	return nil
+}
+func (r *navParserRepositoryStub) NavParserRuns(context.Context, int) ([]model.NavParserRun, error) {
+	return nil, nil
+}
+
+func TestManualParserRunRemainsAvailableInBackground(t *testing.T) {
+	repository := &navParserRepositoryStub{}
+	parser := NewNavParserService(repository)
+	if err := parser.StartManual(); err != nil {
+		t.Fatalf("start manual parser: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for parser.Status().Running && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	parser.Close()
+
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if repository.attempts != 1 || repository.runs != 1 {
+		t.Fatalf("expected one manual attempt and success, got attempts=%d runs=%d", repository.attempts, repository.runs)
 	}
 }

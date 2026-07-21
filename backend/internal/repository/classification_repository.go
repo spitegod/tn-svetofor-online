@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"tn/backend/internal/apperror"
 	"tn/backend/internal/model"
 )
 
@@ -17,42 +18,15 @@ func NewClassificationRepository(db *sql.DB) *ClassificationRepository {
 	return &ClassificationRepository{db: db}
 }
 
-func (r *ClassificationRepository) NavSystemData(ctx context.Context, systemName string) (string, string, bool, error) {
-	var systemURL string
-	var constructionType string
-	err := r.db.QueryRowContext(ctx, `
-		SELECT nav.system_url, COALESCE((
-			SELECT characteristic.value
-			FROM nav_system_characteristics characteristic
-			WHERE characteristic.system_key = nav.system_key
-				AND LOWER(BTRIM(characteristic.name)) IN ('сегмент строительства', 'тип строительства')
-			ORDER BY
-				CASE WHEN LOWER(BTRIM(characteristic.name)) = 'сегмент строительства' THEN 0 ELSE 1 END,
-				characteristic.position
-			LIMIT 1
-		), '')
-		FROM nav_systems nav
-		WHERE nav.system_key = LOWER(REGEXP_REPLACE(BTRIM($1), '\s+', ' ', 'g'))
-	`, systemName).Scan(&systemURL, &constructionType)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return "", "", false, nil
-		}
-		return "", "", false, fmt.Errorf("load NAV system data: %w", err)
-	}
-	return systemURL, constructionType, true, nil
-}
-
 func (r *ClassificationRepository) ReplaceAll(ctx context.Context, orderID int64, rows []model.ClassificationChange) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin replace classification changes: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(6_100_000_000)+orderID); err != nil {
+		return fmt.Errorf("lock classification import: %w", err)
+	}
 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM classification_changes WHERE order_id = $1`, orderID); err != nil {
 		return fmt.Errorf("clear classification changes: %w", err)
@@ -93,17 +67,36 @@ func (r *ClassificationRepository) Update(ctx context.Context, id int64, orderID
 
 	var updated model.ClassificationChange
 	err = tx.QueryRowContext(ctx, `
-		UPDATE classification_changes
-		SET system_name = $3, class_before = $4, class_after = $5
-		WHERE id = $1 AND order_id = $2
-		RETURNING id, order_id, position, system_name, system_url, class_before, class_after, imported_at
+		WITH updated AS (
+			UPDATE classification_changes
+			SET system_name = $3, class_before = $4, class_after = $5
+			WHERE id = $1 AND order_id = $2
+			RETURNING *
+		)
+		SELECT updated.id, updated.order_id, updated.position, updated.system_name,
+			COALESCE(NULLIF(nav.system_url, ''), updated.system_url),
+			COALESCE(NULLIF(nav_construction.value, ''), updated.construction_type),
+			updated.class_before, updated.class_after, updated.imported_at
+		FROM updated
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(updated.system_name), '\s+', ' ', 'g'))
+		LEFT JOIN LATERAL (
+			SELECT characteristic.value
+			FROM nav_system_characteristics characteristic
+			WHERE characteristic.system_key = nav.system_key
+				AND LOWER(BTRIM(characteristic.name)) IN ('сегмент строительства', 'тип строительства')
+			ORDER BY
+				CASE WHEN LOWER(BTRIM(characteristic.name)) = 'сегмент строительства' THEN 0 ELSE 1 END,
+				characteristic.position
+			LIMIT 1
+		) nav_construction ON TRUE
 	`, id, orderID, row.SystemName, row.ClassBefore, row.ClassAfter).Scan(
 		&updated.ID, &updated.OrderID, &updated.Position, &updated.SystemName, &updated.SystemURL,
-		&updated.ClassBefore, &updated.ClassAfter, &updated.ImportedAt,
+		&updated.ConstructionType, &updated.ClassBefore, &updated.ClassAfter, &updated.ImportedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.ClassificationChange{}, fmt.Errorf("classification change not found")
+			return model.ClassificationChange{}, apperror.New(apperror.NotFound, "classification change not found")
 		}
 		return model.ClassificationChange{}, fmt.Errorf("update classification change: %w", err)
 	}
@@ -123,32 +116,47 @@ func (r *ClassificationRepository) List(ctx context.Context, filter model.Classi
 
 	if filter.OrderID > 0 {
 		args = append(args, filter.OrderID)
-		clauses = append(clauses, fmt.Sprintf("order_id = $%d", len(args)))
+		clauses = append(clauses, fmt.Sprintf("changes.order_id = $%d", len(args)))
 	}
 
 	if filter.Query != "" {
-		args = append(args, "%"+strings.ToLower(filter.Query)+"%")
-		clauses = append(clauses, fmt.Sprintf("LOWER(system_name) LIKE $%d", len(args)))
+		args = append(args, containsLikePattern(filter.Query))
+		clauses = append(clauses, fmt.Sprintf("LOWER(changes.system_name) LIKE $%d ESCAPE '\\'", len(args)))
 	}
 
 	if filter.ConstructionType != "" {
 		args = append(args, filter.ConstructionType)
-		clauses = append(clauses, fmt.Sprintf("construction_type = $%d", len(args)))
+		clauses = append(clauses, fmt.Sprintf("COALESCE(NULLIF(nav_construction.value, ''), changes.construction_type) = $%d", len(args)))
 	}
 
 	if filter.ClassBefore != "" {
 		args = append(args, filter.ClassBefore)
-		clauses = append(clauses, fmt.Sprintf("class_before = $%d", len(args)))
+		clauses = append(clauses, fmt.Sprintf("changes.class_before = $%d", len(args)))
 	}
 
 	if filter.ClassAfter != "" {
 		args = append(args, filter.ClassAfter)
-		clauses = append(clauses, fmt.Sprintf("class_after = $%d", len(args)))
+		clauses = append(clauses, fmt.Sprintf("changes.class_after = $%d", len(args)))
 	}
 
 	query := `
-		SELECT id, order_id, position, system_name, system_url, construction_type, class_before, class_after, imported_at
-		FROM classification_changes
+		SELECT changes.id, changes.order_id, changes.position, changes.system_name,
+			COALESCE(NULLIF(nav.system_url, ''), changes.system_url),
+			COALESCE(NULLIF(nav_construction.value, ''), changes.construction_type),
+			changes.class_before, changes.class_after, changes.imported_at
+		FROM classification_changes changes
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(changes.system_name), '\s+', ' ', 'g'))
+		LEFT JOIN LATERAL (
+			SELECT characteristic.value
+			FROM nav_system_characteristics characteristic
+			WHERE characteristic.system_key = nav.system_key
+				AND LOWER(BTRIM(characteristic.name)) IN ('сегмент строительства', 'тип строительства')
+			ORDER BY
+				CASE WHEN LOWER(BTRIM(characteristic.name)) = 'сегмент строительства' THEN 0 ELSE 1 END,
+				characteristic.position
+			LIMIT 1
+		) nav_construction ON TRUE
 	`
 	if len(clauses) > 0 {
 		query += " WHERE " + strings.Join(clauses, " AND ")
@@ -216,7 +224,10 @@ func (r *ClassificationRepository) Stats(ctx context.Context, orderID int64) (mo
 			COUNT(*) FILTER (WHERE is_new) AS added_systems,
 			COUNT(*) FILTER (WHERE class_after = 'Рекомендованная') AS recommended,
 			COUNT(*) FILTER (WHERE class_after = 'Разрешенная') AS allowed,
-			COUNT(*) FILTER (WHERE class_before <> 'Новая система') AS classification_changes
+				COUNT(*) FILTER (
+					WHERE class_before <> 'Новая система'
+						AND class_before IS DISTINCT FROM class_after
+				) AS classification_changes
 		FROM compared
 	`
 
