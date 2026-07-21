@@ -176,8 +176,8 @@ button:disabled {
 
 .header-class-legend__toggle {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   place-items: center;
   border: 1px solid #dfe4eb;
   border-radius: 50%;
@@ -200,11 +200,11 @@ button:disabled {
   position: absolute;
   top: calc(100% + 10px);
   right: 0;
-  width: min(760px, calc(100vw - 48px));
+  width: min(840px, calc(100vw - 48px));
   border: 1px solid #dce3ec;
   border-radius: 12px;
   background: #ffffff;
-  padding: 12px;
+  padding: 16px;
   box-shadow: 0 20px 48px rgba(31, 41, 55, 0.18);
   transform-origin: top right;
 }
@@ -2078,7 +2078,7 @@ button:disabled {
 .classification-class-legend {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 12px;
 }
 
 .classification-class-legend__item {
@@ -2131,6 +2131,23 @@ button:disabled {
 .classification-class-legend__item strong {
   color: var(--legend-accent);
   font-weight: 700;
+}
+
+.header-class-legend__panel .classification-class-legend__item {
+  gap: 11px;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.header-class-legend__panel .classification-class-legend__marker {
+  width: 11px;
+  height: 11px;
+  margin-top: 5px;
+}
+
+.header-class-legend__panel .classification-class-legend__item p {
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -4483,6 +4500,11 @@ button:disabled {
   box-shadow: 0 6px 18px rgba(31, 41, 55, 0.04);
 }
 
+.settings-orders-group {
+  display: grid;
+  gap: 12px;
+}
+
 .settings-orders-header {
   align-items: center;
   border-bottom: 1px solid #e3e8ef;
@@ -4543,16 +4565,16 @@ button:disabled {
 
 .settings-create-order {
   display: inline-flex;
-  min-height: 42px;
+  min-height: 46px;
   align-items: center;
   gap: 9px;
   border: 1px solid var(--tn-red);
   border-radius: 8px;
   background: var(--tn-red);
   color: #ffffff;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
-  padding: 0 16px;
+  padding: 0 18px;
   transition: background-color 160ms ease, color 160ms ease, transform 160ms ease;
 }
 
@@ -5251,6 +5273,17 @@ button:disabled {
 .settings-docs-table td {
   height: 76px;
   vertical-align: middle;
+}
+
+.settings-create-order > svg {
+  width: 20px;
+  height: 20px;
+}
+
+.settings-orders-pagination {
+  border: 0;
+  background: transparent;
+  padding: 0 6px;
 }
 
 .settings-docs-table tbody tr {

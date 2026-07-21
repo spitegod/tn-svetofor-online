@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ArrowDownUp,
   CalendarDays,
@@ -44,6 +44,30 @@ import pngFileIcon from 'bootstrap-icons/icons/filetype-png.svg'
 import xlsFileIcon from 'bootstrap-icons/icons/filetype-xls.svg'
 import xlsxFileIcon from 'bootstrap-icons/icons/filetype-xlsx.svg'
 import logo from '@/shared/assets/logo.png'
+
+function persistedPageSize(key: string, fallback: string, allowedValues: string[]) {
+  const storageKey = `tn-svetofor:page-size:${key}`
+  let initialValue = fallback
+  try {
+    const savedValue = window.localStorage.getItem(storageKey)
+    if (savedValue && allowedValues.includes(savedValue)) {
+      initialValue = savedValue
+    }
+  } catch {
+    // The table keeps its fallback when browser storage is unavailable.
+  }
+
+  const value = ref(initialValue)
+  watch(value, (nextValue) => {
+    if (!allowedValues.includes(nextValue)) return
+    try {
+      window.localStorage.setItem(storageKey, nextValue)
+    } catch {
+      // Page-size selection still works for the current session.
+    }
+  })
+  return value
+}
 
 type ClassificationChange = {
   id: number
@@ -239,6 +263,8 @@ const classOptions = ['Разрешенная', 'Рекомендованная'
 const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'Уртенков А.', 'Золотарев М.', 'Кузнецова Н.']
 
 const orders = ref<Order[]>([])
+const ordersPageSize = persistedPageSize('settings-orders', '10', ['5', '10', '20', '50', '100', 'all'])
+const ordersPage = ref(1)
 const selectedOrderId = ref<number | null>(null)
 const MAX_COMPARISON_ORDERS = 6
 const comparisonOrderIds = ref<number[]>([])
@@ -249,7 +275,7 @@ const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
 const comparisonOnlyDifferences = ref(false)
 const comparisonSort = ref<'differences-first' | 'name-asc' | 'name-desc'>('differences-first')
-const comparisonPageSize = ref('50')
+const comparisonPageSize = persistedPageSize('comparison', '50', ['50', '100', 'all'])
 const comparisonPage = ref(1)
 const isComparisonLoading = ref(true)
 const comparisonError = ref('')
@@ -278,9 +304,9 @@ const importFileInput = ref<HTMLInputElement | null>(null)
 const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const orderWorkbookInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
-const classificationPageSize = ref('50')
+const classificationPageSize = persistedPageSize('changes', '50', ['50', '100', 'all'])
 const classificationPage = ref(1)
-const settingsClassificationPageSize = ref('10')
+const settingsClassificationPageSize = persistedPageSize('settings-table-1', '10', ['10', '20', '50', '100', 'all'])
 const settingsClassificationPage = ref(1)
 const isSettingsClassificationUnlocked = ref(false)
 const classificationStats = ref<ClassificationStats>({
@@ -315,11 +341,11 @@ const activeChangeFilterCount = computed(() => [
 ].filter(Boolean).length)
 const hasActiveChangeFilters = computed(() => activeChangeFilterCount.value > 0)
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
-const settingsSystemCatalogPageSize = ref('10')
+const settingsSystemCatalogPageSize = persistedPageSize('settings-table-2', '10', ['10', '20', '50', '100', 'all'])
 const settingsSystemCatalogPage = ref(1)
 const isSettingsSystemCatalogUnlocked = ref(false)
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
-const systemDocumentPageSize = ref('50')
+const systemDocumentPageSize = persistedPageSize('systems', '50', ['50', '100', 'all'])
 const systemDocumentPage = ref(1)
 const systemsConstructionTypes = computed(() => constructionTypes.map((name) => ({
   name,
@@ -327,7 +353,7 @@ const systemsConstructionTypes = computed(() => constructionTypes.map((name) => 
 })))
 const documentRows = ref<SystemDocumentRow[]>([])
 const documentSearch = ref('')
-const settingsDocumentsPageSize = ref('10')
+const settingsDocumentsPageSize = persistedPageSize('settings-table-3', '10', ['10', '20', '50', '100', 'all'])
 const settingsDocumentsPage = ref(1)
 const documentError = ref('')
 const isDocumentTableLoading = ref(true)
@@ -336,7 +362,7 @@ const classificationCatalogSearch = ref('')
 const classificationCatalogSearchInput = ref('')
 const isClassificationSearchPending = ref(false)
 const classificationView = ref<'grid' | 'list'>('grid')
-const classificationCatalogPageSize = ref('50')
+const classificationCatalogPageSize = persistedPageSize('classification', '50', ['50', '100', '200', 'all'])
 const classificationCatalogPage = ref(1)
 const isClassificationCatalogLoading = ref(true)
 const classificationCatalogError = ref('')
@@ -576,6 +602,44 @@ async function refreshChangesPage() {
   }
 }
 
+const visibleOrders = computed(() => {
+  if (ordersPageSize.value === 'all') return orders.value
+  const pageSize = Number(ordersPageSize.value)
+  const start = (ordersPage.value - 1) * pageSize
+  return orders.value.slice(start, start + pageSize)
+})
+
+function ordersPageCount() {
+  if (ordersPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(orders.value.length / Number(ordersPageSize.value)))
+}
+
+function ordersRangeStart() {
+  if (orders.value.length === 0) return 0
+  if (ordersPageSize.value === 'all') return 1
+  return (ordersPage.value - 1) * Number(ordersPageSize.value) + 1
+}
+
+function ordersRangeEnd() {
+  if (ordersPageSize.value === 'all') return orders.value.length
+  return Math.min(ordersPage.value * Number(ordersPageSize.value), orders.value.length)
+}
+
+function changeOrdersPageSize() {
+  ordersPage.value = 1
+  settingsOrderMenuId.value = null
+}
+
+async function changeOrdersPage(nextPage: number) {
+  ordersPage.value = Math.min(Math.max(nextPage, 1), ordersPageCount())
+  settingsOrderMenuId.value = null
+  await nextTick()
+  document.querySelector<HTMLElement>('.orders-settings')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
+}
+
 async function refreshSystemsPage() {
   if (isSystemsRefreshing.value) {
     return
@@ -670,6 +734,7 @@ async function loadOrders() {
     }
 
     orders.value = await response.json()
+    ordersPage.value = Math.min(ordersPage.value, ordersPageCount())
     if (!selectedOrderId.value && orders.value.length > 0) {
       selectedOrderId.value = orders.value[0].id
     }
@@ -831,6 +896,7 @@ async function deleteOrder(order: Order) {
   }
 
   orders.value = orders.value.filter((item) => item.id !== order.id)
+  ordersPage.value = Math.min(ordersPage.value, ordersPageCount())
   if (selectedOrderId.value === order.id) {
     selectedOrderId.value = orders.value[0]?.id ?? null
   }
@@ -4163,6 +4229,7 @@ onBeforeUnmount(() => {
           </details>
         </section>
 
+        <div class="settings-orders-group">
         <section class="settings-section orders-settings" aria-labelledby="orders-db-title">
           <div class="settings-section__header settings-orders-header">
             <div class="settings-orders-heading">
@@ -4227,7 +4294,7 @@ onBeforeUnmount(() => {
                 <tr v-if="!isOrdersLoading && orders.length === 0">
                   <td class="empty-table-cell" colspan="4">Распоряжений пока нет</td>
                 </tr>
-                <tr v-for="order in orders" :key="order.id">
+                <tr v-for="order in visibleOrders" :key="order.id">
                   <td>
                     <span class="settings-order-name">
                       <i aria-hidden="true"><Database :size="17" :stroke-width="1.8" /></i>
@@ -4264,6 +4331,30 @@ onBeforeUnmount(() => {
 
           <p v-if="ordersError" class="table-message table-message--error">{{ ordersError }}</p>
         </section>
+        <footer v-if="!isOrdersLoading && orders.length > 0" class="table-pagination settings-orders-pagination">
+          <span class="table-pagination__range">
+            Показано {{ ordersRangeStart() }}–{{ ordersRangeEnd() }} из {{ orders.length }}
+          </span>
+          <div class="table-pagination__controls">
+            <label>
+              <span>Записей на странице</span>
+              <select v-model="ordersPageSize" @change="changeOrdersPageSize">
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
+            <div v-if="ordersPageSize !== 'all'" class="table-pagination__pages">
+              <button type="button" :disabled="ordersPage === 1" aria-label="Предыдущая страница" @click="changeOrdersPage(ordersPage - 1)">‹</button>
+              <strong>{{ ordersPage }} / {{ ordersPageCount() }}</strong>
+              <button type="button" :disabled="ordersPage >= ordersPageCount()" aria-label="Следующая страница" @click="changeOrdersPage(ordersPage + 1)">›</button>
+            </div>
+          </div>
+        </footer>
+        </div>
 
         <section class="settings-section settings-editor" aria-labelledby="edit-db-title">
           <div class="settings-section__header">
