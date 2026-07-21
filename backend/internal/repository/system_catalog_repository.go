@@ -398,6 +398,18 @@ func (r *SystemCatalogRepository) SaveNavParserRun(ctx context.Context, run mode
 		}
 	}
 
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM nav_parser_runs
+		WHERE id NOT IN (
+			SELECT id
+			FROM nav_parser_runs
+			ORDER BY started_at DESC, id DESC
+			LIMIT 5
+		)
+	`); err != nil {
+		return fmt.Errorf("prune nav parser run history: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit nav parser run: %w", err)
 	}

@@ -240,6 +240,7 @@ const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'У
 
 const orders = ref<Order[]>([])
 const selectedOrderId = ref<number | null>(null)
+const MAX_COMPARISON_ORDERS = 6
 const comparisonOrderIds = ref<number[]>([])
 const comparisonCatalogByOrder = ref<Record<number, SystemDocumentRow[]>>({})
 const comparisonPendingIds = ref<number[]>([])
@@ -488,6 +489,7 @@ const activeSystemFilterCount = computed(() => [
 ].filter(Boolean).length)
 const hasActiveSystemFilters = computed(() => activeSystemFilterCount.value > 0)
 const isNavParsing = ref(false)
+const isNavParserCancelling = ref(false)
 const navParseMessage = ref('')
 const navParseError = ref('')
 const navParseNotFound = ref<string[]>([])
@@ -511,6 +513,7 @@ const navParserProgress = ref<NavParserProgress>({
 const navParserLogsNewestFirst = computed(() => [...navParserProgress.value.logs].reverse())
 const navParserRuns = ref<NavParserRun[]>([])
 const isNavParserLogOpen = ref(false)
+const isNavParserHistoryOpen = ref(false)
 const openedNavParserRunId = ref<number | null>(null)
 const navParseFailedSystems = ref<string[]>([])
 const navParserWorkerCount = ref(4)
@@ -525,6 +528,7 @@ const navSettingsMessage = ref('')
 const navSettingsError = ref('')
 let navParserPollTimer: ReturnType<typeof window.setInterval> | null = null
 let navParserRequestPending = false
+let navParserCancelRequested = false
 
 function selectedOrderName() {
   return orders.value.find((order) => order.id === selectedOrderId.value)?.name ?? 'Распоряжение не выбрано'
@@ -902,6 +906,11 @@ function availableComparisonOrders() {
 }
 
 async function addComparisonOrder(order?: Order) {
+  if (comparisonOrderIds.value.length >= MAX_COMPARISON_ORDERS) {
+    openedSelect.value = null
+    return
+  }
+
   const nextOrder = order ?? availableComparisonOrders()[0]
   if (nextOrder) {
     comparisonOrderIds.value.push(nextOrder.id)
@@ -1518,6 +1527,7 @@ async function runNavParser() {
   }
 
   navParserRequestPending = true
+  navParserCancelRequested = false
   isNavParsing.value = true
   navParseMessage.value = ''
   navParseError.value = ''
@@ -1543,19 +1553,50 @@ async function runNavParser() {
     selectedClassificationFilters.value = {}
     await Promise.all([loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings()])
   } catch (error) {
-    navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
+    if (navParserCancelRequested) {
+      navParseMessage.value = 'Парсинг отменён'
+    } else {
+      navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
+    }
   } finally {
     navParserRequestPending = false
     await Promise.all([loadNavParserProgress(), loadNavParserRuns()])
     isNavParsing.value = navParserProgress.value.running
+    navParserCancelRequested = false
     if (!navParserProgress.value.running) {
       stopNavParserPolling()
     }
   }
 }
 
+async function cancelNavParser() {
+  if (!isNavParsing.value || isNavParserCancelling.value) {
+    return
+  }
+
+  isNavParserCancelling.value = true
+  navParserCancelRequested = true
+  navParseError.value = ''
+  try {
+    const response = await fetch(`${API_BASE_URL}/nav-parser/cancel`, { method: 'POST' })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      if (response.status !== 409) {
+        throw new Error(payload?.error ?? 'Не удалось остановить парсинг')
+      }
+    }
+    await Promise.all([loadNavParserProgress(), loadNavParserRuns()])
+  } catch (error) {
+    navParserCancelRequested = false
+    navParseError.value = error instanceof Error ? error.message : 'Не удалось остановить парсинг'
+  } finally {
+    isNavParserCancelling.value = false
+  }
+}
+
 async function loadNavParserProgress() {
   try {
+    const wasRunning = navParserProgress.value.running
     const response = await fetch(`${API_BASE_URL}/nav-parser/status`)
     if (!response.ok) {
       throw new Error('Не удалось загрузить прогресс парсера')
@@ -1564,10 +1605,16 @@ async function loadNavParserProgress() {
     navParserProgress.value = { ...progress, logs: progress.logs ?? [] }
     if (navParserProgress.value.running) {
       isNavParserLogOpen.value = true
+    } else if (navParserProgress.value.logs.length === 0) {
+      isNavParserLogOpen.value = false
     }
     isNavParsing.value = navParserProgress.value.running || navParserRequestPending
     if (navParserProgress.value.running && !navParserPollTimer) {
       startNavParserPolling()
+    }
+    if (wasRunning && !navParserProgress.value.running) {
+      navParserCancelRequested = false
+      void loadNavParserRuns()
     }
   } catch (error) {
     if (navParserRequestPending) {
@@ -1578,7 +1625,7 @@ async function loadNavParserProgress() {
 
 async function loadNavParserRuns() {
   try {
-    const response = await fetch(`${API_BASE_URL}/nav-parser/runs?limit=50`)
+    const response = await fetch(`${API_BASE_URL}/nav-parser/runs?limit=5`)
     if (!response.ok) {
       throw new Error('Не удалось загрузить историю запусков')
     }
@@ -3729,16 +3776,16 @@ onBeforeUnmount(() => {
                   <button
                     class="comparison-add-button"
                     type="button"
-                    :disabled="availableComparisonOrders().length === 0"
+                    :disabled="comparisonOrderIds.length >= MAX_COMPARISON_ORDERS || availableComparisonOrders().length === 0"
                     aria-label="Добавить распоряжение"
-                    :title="availableComparisonOrders().length ? 'Добавить распоряжение' : 'Все распоряжения уже добавлены'"
+                    :title="comparisonOrderIds.length >= MAX_COMPARISON_ORDERS ? 'Можно сравнить не более 6 распоряжений' : availableComparisonOrders().length ? 'Добавить распоряжение' : 'Все распоряжения уже добавлены'"
                     @click.stop="toggleSelect('comparison-add')"
                   >
                     <Plus :size="20" :stroke-width="2" aria-hidden="true" />
                     <span>Добавить распоряжение</span>
                   </button>
                   <Transition name="select-menu">
-                    <div v-if="openedSelect === 'comparison-add' && availableComparisonOrders().length" class="custom-select__menu comparison-add-menu">
+                    <div v-if="openedSelect === 'comparison-add' && comparisonOrderIds.length < MAX_COMPARISON_ORDERS && availableComparisonOrders().length" class="custom-select__menu comparison-add-menu">
                       <button v-for="order in availableComparisonOrders()" :key="order.id" class="custom-select__option" type="button" @click="addComparisonOrder(order)">
                         {{ order.name }}
                       </button>
@@ -3835,7 +3882,10 @@ onBeforeUnmount(() => {
               <tr>
                 <th>Название системы <ArrowDownUp :size="15" :stroke-width="1.7" aria-hidden="true" /></th>
                 <th v-for="(orderId, index) in comparisonOrderIds" :key="orderId">
-                  <span class="comparison-table__order"><i>{{ index + 1 }}</i>{{ comparisonOrderName(orderId) }}</span>
+                  <span class="comparison-table__order">
+                    <i>{{ index + 1 }}</i>
+                    <span :title="comparisonOrderName(orderId)">{{ comparisonOrderName(orderId) }}</span>
+                  </span>
                 </th>
                 <th>Действие</th>
               </tr>
@@ -3914,8 +3964,14 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="parser-settings__controls">
-              <button class="import-button parser-settings__button" type="button" :disabled="isNavParsing" @click="runNavParser">
-                {{ isNavParsing ? 'Парсинг выполняется…' : 'Запустить парсер' }}
+              <button
+                class="import-button parser-settings__button"
+                :class="{ 'parser-settings__button--stop': isNavParsing }"
+                type="button"
+                :disabled="isNavParserCancelling"
+                @click="isNavParsing ? cancelNavParser() : runNavParser()"
+              >
+                {{ isNavParserCancelling ? 'Останавливаем…' : isNavParsing ? 'Остановить парсинг' : 'Запустить парсер' }}
               </button>
             </div>
           </div>
@@ -3975,15 +4031,21 @@ onBeforeUnmount(() => {
               </Transition>
             </section>
           </section>
-          <section class="parser-history" aria-labelledby="parser-history-title">
-            <header class="parser-history__header">
-              <div>
-                <h2 id="parser-history-title">Журнал всех запусков</h2>
-              </div>
-              <span>{{ navParserRuns.length }} запусков</span>
-            </header>
-            <p v-if="!navParserRuns.length" class="parser-history__empty">Завершённых запусков пока нет.</p>
-            <div v-else class="parser-history__list">
+          <section class="parser-options-section">
+            <button
+              class="parser-options__toggle"
+              type="button"
+              :aria-expanded="isNavParserHistoryOpen"
+              @click="isNavParserHistoryOpen = !isNavParserHistoryOpen"
+            >
+              <span>Журнал запусков</span>
+              <ChevronDown :class="{ 'is-open': isNavParserHistoryOpen }" :size="17" :stroke-width="1.9" aria-hidden="true" />
+            </button>
+            <Transition name="parser-options">
+              <div v-if="isNavParserHistoryOpen" class="parser-options__shell">
+                <section class="parser-history" aria-label="Журнал запусков">
+                  <p v-if="!navParserRuns.length" class="parser-history__empty">Завершённых запусков пока нет.</p>
+                  <div v-else class="parser-history__list">
               <article v-for="run in navParserRuns" :key="run.id" class="parser-history__run" :class="`is-${run.status}`">
                 <button
                   class="parser-history__run-toggle"
@@ -3993,6 +4055,7 @@ onBeforeUnmount(() => {
                 >
                   <span class="parser-history__status" aria-hidden="true">
                     <CircleCheck v-if="run.status === 'completed'" :size="17" :stroke-width="2" />
+                    <X v-else-if="run.status === 'canceled'" :size="17" :stroke-width="2" />
                     <TriangleAlert v-else :size="17" :stroke-width="2" />
                   </span>
                   <span class="parser-history__identity">
@@ -4018,7 +4081,10 @@ onBeforeUnmount(() => {
                   </div>
                 </Transition>
               </article>
-            </div>
+                  </div>
+                </section>
+              </div>
+            </Transition>
           </section>
           <section class="parser-options-section">
             <button
@@ -4497,7 +4563,7 @@ onBeforeUnmount(() => {
                 <small>Комментарии и документы по системам</small>
               </span>
               <label class="settings-search">
-                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или ЕКН" @input="settingsDocumentsPage = 1" />
+                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или шифру" @input="settingsDocumentsPage = 1" />
               </label>
             </div>
 
