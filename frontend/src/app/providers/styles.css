@@ -5249,7 +5249,7 @@ button:disabled {
 }
 
 .settings-docs-table td {
-  height: 72px;
+  height: 76px;
   vertical-align: middle;
 }
 
@@ -5263,11 +5263,66 @@ button:disabled {
 }
 
 .settings-docs-table__code {
-  display: block;
-  margin-top: 5px;
-  color: #8a93a3;
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 24px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #e0e6ee;
+  border-radius: 6px;
+  background: #f5f7fa;
+  color: #68758a;
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
+  padding: 4px 7px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-docs-table__code.is-empty {
+  color: #929baa;
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.settings-docs-system {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 11px;
+  align-items: center;
+}
+
+.settings-docs-system__icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid #e2e7ee;
+  border-radius: 9px;
+  background: #f5f7fa;
+  color: #64748b;
+}
+
+.settings-docs-system__identity {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+
+.settings-docs-system__identity > strong {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #26344d;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .document-comment-input {
@@ -5307,7 +5362,7 @@ button:disabled {
 
 .settings-docs-table th:nth-child(1),
 .settings-docs-table td:nth-child(1) {
-  width: 240px;
+  width: 330px;
 }
 
 .settings-docs-table th:nth-child(3),

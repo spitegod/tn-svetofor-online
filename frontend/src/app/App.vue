@@ -4466,7 +4466,7 @@ onBeforeUnmount(() => {
                 <thead>
                   <tr>
                     <th>Шифр</th>
-                    <th>Название системы</th>
+                    <th>Система</th>
                     <th>Класс</th>
                     <th>
                       <span class="settings-class-header settings-curator-header">
@@ -4606,9 +4606,18 @@ onBeforeUnmount(() => {
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 3</td>
                   </tr>
                   <tr v-for="row in visibleDocumentRows" :key="`document-${row.id}`">
-                    <td>
-                      <strong>{{ row.systemName }}</strong>
-                      <small class="settings-docs-table__code">{{ row.code }}</small>
+                    <td class="settings-docs-system-cell">
+                      <div class="settings-docs-system">
+                        <span class="settings-docs-system__icon" aria-hidden="true">
+                          <Layers3 :size="19" :stroke-width="1.8" />
+                        </span>
+                        <span class="settings-docs-system__identity">
+                          <strong :title="row.systemName">{{ row.systemName }}</strong>
+                          <small class="settings-docs-table__code" :class="{ 'is-empty': !row.code.trim() }">
+                            {{ row.code.trim() || 'Шифр не присвоен' }}
+                          </small>
+                        </span>
+                      </div>
                     </td>
                     <td>
                       <textarea
