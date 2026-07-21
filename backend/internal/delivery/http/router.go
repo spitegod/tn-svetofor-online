@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,7 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("POST /api/system-catalog/import", router.importSystemCatalog)
 	mux.HandleFunc("GET /api/system-catalog/export", router.exportSystemCatalog)
 	mux.HandleFunc("POST /api/system-catalog/parse-nav", router.parseNavSystemCatalog)
+	mux.HandleFunc("POST /api/nav-parser/cancel", router.cancelNavParser)
 	mux.HandleFunc("GET /api/nav-parser/status", router.navParserStatus)
 	mux.HandleFunc("GET /api/nav-parser/runs", router.navParserRuns)
 	mux.HandleFunc("GET /api/nav-system-types/{slug}/image", router.navSystemTypeImage)
@@ -267,11 +269,27 @@ func (r *Router) parseNavSystemCatalog(w http.ResponseWriter, request *http.Requ
 			writeError(w, http.StatusConflict, err)
 			return
 		}
+		if errors.Is(err, context.Canceled) {
+			writeError(w, http.StatusConflict, fmt.Errorf("NAV parser was canceled"))
+			return
+		}
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, report)
+}
+
+func (r *Router) cancelNavParser(w http.ResponseWriter, _ *http.Request) {
+	if err := r.navParser.Cancel(); err != nil {
+		if errors.Is(err, service.ErrNavParserNotRunning) {
+			writeError(w, http.StatusConflict, err)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (r *Router) navParserStatus(w http.ResponseWriter, _ *http.Request) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   ArrowDownUp,
   CalendarDays,
@@ -44,6 +44,30 @@ import pngFileIcon from 'bootstrap-icons/icons/filetype-png.svg'
 import xlsFileIcon from 'bootstrap-icons/icons/filetype-xls.svg'
 import xlsxFileIcon from 'bootstrap-icons/icons/filetype-xlsx.svg'
 import logo from '@/shared/assets/logo.png'
+
+function persistedPageSize(key: string, fallback: string, allowedValues: string[]) {
+  const storageKey = `tn-svetofor:page-size:${key}`
+  let initialValue = fallback
+  try {
+    const savedValue = window.localStorage.getItem(storageKey)
+    if (savedValue && allowedValues.includes(savedValue)) {
+      initialValue = savedValue
+    }
+  } catch {
+    // The table keeps its fallback when browser storage is unavailable.
+  }
+
+  const value = ref(initialValue)
+  watch(value, (nextValue) => {
+    if (!allowedValues.includes(nextValue)) return
+    try {
+      window.localStorage.setItem(storageKey, nextValue)
+    } catch {
+      // Page-size selection still works for the current session.
+    }
+  })
+  return value
+}
 
 type ClassificationChange = {
   id: number
@@ -239,17 +263,19 @@ const classOptions = ['Разрешенная', 'Рекомендованная'
 const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'Уртенков А.', 'Золотарев М.', 'Кузнецова Н.']
 
 const orders = ref<Order[]>([])
+const ordersPageSize = persistedPageSize('settings-orders', '10', ['5', '10', '20', '50', '100', 'all'])
+const ordersPage = ref(1)
 const selectedOrderId = ref<number | null>(null)
+const MAX_COMPARISON_ORDERS = 6
 const comparisonOrderIds = ref<number[]>([])
 const comparisonCatalogByOrder = ref<Record<number, SystemDocumentRow[]>>({})
 const comparisonPendingIds = ref<number[]>([])
 const attachmentPendingIds = ref<number[]>([])
-const comparisonAllOrders = ref(true)
 const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
 const comparisonOnlyDifferences = ref(false)
 const comparisonSort = ref<'differences-first' | 'name-asc' | 'name-desc'>('differences-first')
-const comparisonPageSize = ref('20')
+const comparisonPageSize = persistedPageSize('comparison', '50', ['50', '100', 'all'])
 const comparisonPage = ref(1)
 const isComparisonLoading = ref(true)
 const comparisonError = ref('')
@@ -278,9 +304,9 @@ const importFileInput = ref<HTMLInputElement | null>(null)
 const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const orderWorkbookInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
-const classificationPageSize = ref('20')
+const classificationPageSize = persistedPageSize('changes', '50', ['50', '100', 'all'])
 const classificationPage = ref(1)
-const settingsClassificationPageSize = ref('10')
+const settingsClassificationPageSize = persistedPageSize('settings-table-1', '10', ['10', '20', '50', '100', 'all'])
 const settingsClassificationPage = ref(1)
 const isSettingsClassificationUnlocked = ref(false)
 const classificationStats = ref<ClassificationStats>({
@@ -297,11 +323,13 @@ const tableSearch = ref('')
 const isClassificationLoading = ref(true)
 const isClassificationFiltering = ref(false)
 const isChangesRefreshing = ref(false)
+const isChangesRefreshDone = ref(false)
 const changesLastRefreshedAt = ref('')
 const classificationLoadingMessage = ref('Загрузка таблицы...')
 const classificationError = ref('')
 const classificationConstructionTypes = computed(() => [...constructionTypes, 'Тип не присвоен'].map((name) => ({
   name,
+  label: name === 'Тип не присвоен' ? 'Тип не найден' : name,
   count: name === 'Все'
     ? classificationRows.value.length
     : classificationRows.value.filter((row) => row.constructionType === name).length,
@@ -313,11 +341,11 @@ const activeChangeFilterCount = computed(() => [
 ].filter(Boolean).length)
 const hasActiveChangeFilters = computed(() => activeChangeFilterCount.value > 0)
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
-const settingsSystemCatalogPageSize = ref('10')
+const settingsSystemCatalogPageSize = persistedPageSize('settings-table-2', '10', ['10', '20', '50', '100', 'all'])
 const settingsSystemCatalogPage = ref(1)
 const isSettingsSystemCatalogUnlocked = ref(false)
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
-const systemDocumentPageSize = ref('20')
+const systemDocumentPageSize = persistedPageSize('systems', '50', ['50', '100', 'all'])
 const systemDocumentPage = ref(1)
 const systemsConstructionTypes = computed(() => constructionTypes.map((name) => ({
   name,
@@ -325,7 +353,7 @@ const systemsConstructionTypes = computed(() => constructionTypes.map((name) => 
 })))
 const documentRows = ref<SystemDocumentRow[]>([])
 const documentSearch = ref('')
-const settingsDocumentsPageSize = ref('10')
+const settingsDocumentsPageSize = persistedPageSize('settings-table-3', '10', ['10', '20', '50', '100', 'all'])
 const settingsDocumentsPage = ref(1)
 const documentError = ref('')
 const isDocumentTableLoading = ref(true)
@@ -334,7 +362,7 @@ const classificationCatalogSearch = ref('')
 const classificationCatalogSearchInput = ref('')
 const isClassificationSearchPending = ref(false)
 const classificationView = ref<'grid' | 'list'>('grid')
-const classificationCatalogPageSize = ref('50')
+const classificationCatalogPageSize = persistedPageSize('classification', '50', ['50', '100', '200', 'all'])
 const classificationCatalogPage = ref(1)
 const isClassificationCatalogLoading = ref(true)
 const classificationCatalogError = ref('')
@@ -356,6 +384,7 @@ const systemTypes = computed(() => [{ slug: '', name: 'Все системы', i
     matchesConstructionType(system) && matchesSystemType(system, type),
   ).length,
 })))
+const visibleSystemTypes = computed(() => systemTypes.value.filter((type) => !type.slug || type.count > 0))
 const selectedSystemType = computed(() =>
   systemTypes.value.find((type) => type.slug === selectedSystemTypeSlug.value) ?? systemTypes.value[0],
 )
@@ -384,8 +413,15 @@ const classificationFilterGroups = computed(() => {
 })
 const visibleClassificationFilterGroups = computed(() => {
   const query = classificationFilterSearch.value.trim().toLocaleLowerCase('ru-RU')
-  if (!query) return classificationFilterGroups.value
-  return classificationFilterGroups.value.filter((name) => name.toLocaleLowerCase('ru-RU').includes(query))
+  const groups = query
+    ? classificationFilterGroups.value.filter((name) => name.toLocaleLowerCase('ru-RU').includes(query))
+    : classificationFilterGroups.value
+
+  return [...groups].sort((left, right) => {
+    const leftSelected = Boolean(selectedClassificationFilters.value[left])
+    const rightSelected = Boolean(selectedClassificationFilters.value[right])
+    return Number(rightSelected) - Number(leftSelected)
+  })
 })
 const selectedClassificationFilterCount = computed(() => Object.keys(selectedClassificationFilters.value).length)
 const activeClassificationPageFilterCount = computed(() => [
@@ -394,6 +430,11 @@ const activeClassificationPageFilterCount = computed(() => [
   selectedSystemTypeSlug.value !== '',
 ].filter(Boolean).length)
 const hasActiveClassificationPageFilters = computed(() => activeClassificationPageFilterCount.value > 0)
+const classificationClassPriority: Record<string, number> = {
+  'Рекомендованная': 0,
+  'Разрешенная': 1,
+  'Запрещенная': 2,
+}
 const classificationSystems = computed(() => {
   const query = classificationCatalogSearch.value.trim().toLocaleLowerCase('ru-RU')
   const selectedFilters = Object.entries(selectedClassificationFilters.value)
@@ -406,7 +447,14 @@ const classificationSystems = computed(() => {
     )
     return matchesSearch && matchesFilters
   })
-  return [...systems].sort((left, right) => left.systemName.localeCompare(right.systemName, 'ru'))
+  return [...systems].sort((left, right) => {
+    const classDifference =
+      (classificationClassPriority[left.systemClass] ?? Number.MAX_SAFE_INTEGER) -
+      (classificationClassPriority[right.systemClass] ?? Number.MAX_SAFE_INTEGER)
+
+    if (classDifference !== 0) return classDifference
+    return left.systemName.localeCompare(right.systemName, 'ru')
+  })
 })
 const classificationEmptyMessage = computed(() => {
   if (classificationCatalogRows.value.length === 0) {
@@ -455,6 +503,7 @@ const isSystemDocumentLoading = ref(true)
 const systemFilterRequestCount = ref(0)
 const isSystemFiltering = computed(() => systemFilterRequestCount.value > 0)
 const isSystemsRefreshing = ref(false)
+const isSystemsRefreshDone = ref(false)
 const systemsLastRefreshedAt = ref('')
 const systemCatalogError = ref('')
 const activeSystemFilterCount = computed(() => [
@@ -466,6 +515,7 @@ const activeSystemFilterCount = computed(() => [
 ].filter(Boolean).length)
 const hasActiveSystemFilters = computed(() => activeSystemFilterCount.value > 0)
 const isNavParsing = ref(false)
+const isNavParserCancelling = ref(false)
 const navParseMessage = ref('')
 const navParseError = ref('')
 const navParseNotFound = ref<string[]>([])
@@ -489,6 +539,7 @@ const navParserProgress = ref<NavParserProgress>({
 const navParserLogsNewestFirst = computed(() => [...navParserProgress.value.logs].reverse())
 const navParserRuns = ref<NavParserRun[]>([])
 const isNavParserLogOpen = ref(false)
+const isNavParserHistoryOpen = ref(false)
 const openedNavParserRunId = ref<number | null>(null)
 const navParseFailedSystems = ref<string[]>([])
 const navParserWorkerCount = ref(4)
@@ -503,6 +554,7 @@ const navSettingsMessage = ref('')
 const navSettingsError = ref('')
 let navParserPollTimer: ReturnType<typeof window.setInterval> | null = null
 let navParserRequestPending = false
+let navParserCancelRequested = false
 
 function selectedOrderName() {
   return orders.value.find((order) => order.id === selectedOrderId.value)?.name ?? 'Распоряжение не выбрано'
@@ -526,43 +578,74 @@ function formatOrderDateTime(value: string) {
   }).format(new Date(value))
 }
 
-function selectedOrderUpdatedAt() {
-  return orders.value.find((order) => order.id === selectedOrderId.value)?.updatedAt ?? ''
-}
-
-function changesPageUpdatedAt() {
-  return changesLastRefreshedAt.value || selectedOrderUpdatedAt()
-}
-
-function systemsPageUpdatedAt() {
-  return systemsLastRefreshedAt.value || selectedOrderUpdatedAt()
-}
-
-function addedSystemsHint() {
-  const index = orders.value.findIndex((order) => order.id === selectedOrderId.value)
-  return index === orders.value.length - 1
-    ? 'Относительно пустой базы'
-    : 'Относительно предыдущего распоряжения'
-}
-
 async function refreshChangesPage() {
   if (isChangesRefreshing.value) {
     return
   }
+  const startedAt = performance.now()
+  isChangesRefreshDone.value = false
   isChangesRefreshing.value = true
   try {
     await loadOrders()
     await loadClassificationChanges()
     changesLastRefreshedAt.value = new Date().toISOString()
   } finally {
+    const remainingAnimationTime = Math.max(0, 1000 - (performance.now() - startedAt))
+    if (remainingAnimationTime > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, remainingAnimationTime))
+    }
     isChangesRefreshing.value = false
+    if (!ordersError.value && !classificationError.value) {
+      isChangesRefreshDone.value = true
+      window.setTimeout(() => { isChangesRefreshDone.value = false }, 1600)
+    }
   }
+}
+
+const visibleOrders = computed(() => {
+  if (ordersPageSize.value === 'all') return orders.value
+  const pageSize = Number(ordersPageSize.value)
+  const start = (ordersPage.value - 1) * pageSize
+  return orders.value.slice(start, start + pageSize)
+})
+
+function ordersPageCount() {
+  if (ordersPageSize.value === 'all') return 1
+  return Math.max(1, Math.ceil(orders.value.length / Number(ordersPageSize.value)))
+}
+
+function ordersRangeStart() {
+  if (orders.value.length === 0) return 0
+  if (ordersPageSize.value === 'all') return 1
+  return (ordersPage.value - 1) * Number(ordersPageSize.value) + 1
+}
+
+function ordersRangeEnd() {
+  if (ordersPageSize.value === 'all') return orders.value.length
+  return Math.min(ordersPage.value * Number(ordersPageSize.value), orders.value.length)
+}
+
+function changeOrdersPageSize() {
+  ordersPage.value = 1
+  settingsOrderMenuId.value = null
+}
+
+async function changeOrdersPage(nextPage: number) {
+  ordersPage.value = Math.min(Math.max(nextPage, 1), ordersPageCount())
+  settingsOrderMenuId.value = null
+  await nextTick()
+  document.querySelector<HTMLElement>('.orders-settings')?.scrollIntoView({
+    behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    block: 'start',
+  })
 }
 
 async function refreshSystemsPage() {
   if (isSystemsRefreshing.value) {
     return
   }
+  const startedAt = performance.now()
+  isSystemsRefreshDone.value = false
   isSystemsRefreshing.value = true
   try {
     await Promise.all([loadSystemCatalog(true), loadSystemDocuments(true)])
@@ -570,7 +653,15 @@ async function refreshSystemsPage() {
       systemsLastRefreshedAt.value = new Date().toISOString()
     }
   } finally {
+    const remainingAnimationTime = Math.max(0, 1000 - (performance.now() - startedAt))
+    if (remainingAnimationTime > 0) {
+      await new Promise((resolve) => window.setTimeout(resolve, remainingAnimationTime))
+    }
     isSystemsRefreshing.value = false
+    if (!systemCatalogError.value) {
+      isSystemsRefreshDone.value = true
+      window.setTimeout(() => { isSystemsRefreshDone.value = false }, 1600)
+    }
   }
 }
 
@@ -643,6 +734,7 @@ async function loadOrders() {
     }
 
     orders.value = await response.json()
+    ordersPage.value = Math.min(ordersPage.value, ordersPageCount())
     if (!selectedOrderId.value && orders.value.length > 0) {
       selectedOrderId.value = orders.value[0].id
     }
@@ -804,6 +896,7 @@ async function deleteOrder(order: Order) {
   }
 
   orders.value = orders.value.filter((item) => item.id !== order.id)
+  ordersPage.value = Math.min(ordersPage.value, ordersPageCount())
   if (selectedOrderId.value === order.id) {
     selectedOrderId.value = orders.value[0]?.id ?? null
   }
@@ -879,6 +972,11 @@ function availableComparisonOrders() {
 }
 
 async function addComparisonOrder(order?: Order) {
+  if (comparisonOrderIds.value.length >= MAX_COMPARISON_ORDERS) {
+    openedSelect.value = null
+    return
+  }
+
   const nextOrder = order ?? availableComparisonOrders()[0]
   if (nextOrder) {
     comparisonOrderIds.value.push(nextOrder.id)
@@ -1495,6 +1593,7 @@ async function runNavParser() {
   }
 
   navParserRequestPending = true
+  navParserCancelRequested = false
   isNavParsing.value = true
   navParseMessage.value = ''
   navParseError.value = ''
@@ -1520,19 +1619,50 @@ async function runNavParser() {
     selectedClassificationFilters.value = {}
     await Promise.all([loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings()])
   } catch (error) {
-    navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
+    if (navParserCancelRequested) {
+      navParseMessage.value = 'Парсинг отменён'
+    } else {
+      navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
+    }
   } finally {
     navParserRequestPending = false
     await Promise.all([loadNavParserProgress(), loadNavParserRuns()])
     isNavParsing.value = navParserProgress.value.running
+    navParserCancelRequested = false
     if (!navParserProgress.value.running) {
       stopNavParserPolling()
     }
   }
 }
 
+async function cancelNavParser() {
+  if (!isNavParsing.value || isNavParserCancelling.value) {
+    return
+  }
+
+  isNavParserCancelling.value = true
+  navParserCancelRequested = true
+  navParseError.value = ''
+  try {
+    const response = await fetch(`${API_BASE_URL}/nav-parser/cancel`, { method: 'POST' })
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      if (response.status !== 409) {
+        throw new Error(payload?.error ?? 'Не удалось остановить парсинг')
+      }
+    }
+    await Promise.all([loadNavParserProgress(), loadNavParserRuns()])
+  } catch (error) {
+    navParserCancelRequested = false
+    navParseError.value = error instanceof Error ? error.message : 'Не удалось остановить парсинг'
+  } finally {
+    isNavParserCancelling.value = false
+  }
+}
+
 async function loadNavParserProgress() {
   try {
+    const wasRunning = navParserProgress.value.running
     const response = await fetch(`${API_BASE_URL}/nav-parser/status`)
     if (!response.ok) {
       throw new Error('Не удалось загрузить прогресс парсера')
@@ -1541,10 +1671,16 @@ async function loadNavParserProgress() {
     navParserProgress.value = { ...progress, logs: progress.logs ?? [] }
     if (navParserProgress.value.running) {
       isNavParserLogOpen.value = true
+    } else if (navParserProgress.value.logs.length === 0) {
+      isNavParserLogOpen.value = false
     }
     isNavParsing.value = navParserProgress.value.running || navParserRequestPending
     if (navParserProgress.value.running && !navParserPollTimer) {
       startNavParserPolling()
+    }
+    if (wasRunning && !navParserProgress.value.running) {
+      navParserCancelRequested = false
+      void loadNavParserRuns()
     }
   } catch (error) {
     if (navParserRequestPending) {
@@ -1555,7 +1691,7 @@ async function loadNavParserProgress() {
 
 async function loadNavParserRuns() {
   try {
-    const response = await fetch(`${API_BASE_URL}/nav-parser/runs?limit=50`)
+    const response = await fetch(`${API_BASE_URL}/nav-parser/runs?limit=5`)
     if (!response.ok) {
       throw new Error('Не удалось загрузить историю запусков')
     }
@@ -1948,65 +2084,6 @@ function toggleClassificationFilter(name: string) {
   openedClassificationFilter.value = openedClassificationFilter.value === name ? null : name
 }
 
-const classificationFilterAnimations = new WeakMap<HTMLElement, Animation>()
-
-function runClassificationFilterAnimation(
-  element: Element,
-  keyframes: Keyframe[],
-  done: () => void,
-  keepExpanded: boolean,
-) {
-  const panel = element as HTMLElement
-  classificationFilterAnimations.get(panel)?.cancel()
-
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    done()
-    return
-  }
-
-  panel.style.overflow = 'hidden'
-  const animation = panel.animate(keyframes, {
-    duration: 260,
-    easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
-  })
-  classificationFilterAnimations.set(panel, animation)
-
-  animation.addEventListener('finish', () => {
-    classificationFilterAnimations.delete(panel)
-    if (keepExpanded) {
-      panel.style.removeProperty('height')
-      panel.style.removeProperty('overflow')
-      panel.style.removeProperty('opacity')
-      panel.style.removeProperty('transform')
-    }
-    done()
-  }, { once: true })
-}
-
-function expandClassificationFilter(element: Element, done: () => void) {
-  const panel = element as HTMLElement
-  const targetHeight = panel.scrollHeight
-  runClassificationFilterAnimation(panel, [
-    { height: '0px', opacity: 0, transform: 'translateY(-5px)' },
-    { height: `${targetHeight}px`, opacity: 1, transform: 'translateY(0)' },
-  ], done, true)
-}
-
-function collapseClassificationFilter(element: Element, done: () => void) {
-  const panel = element as HTMLElement
-  const currentHeight = panel.getBoundingClientRect().height
-  runClassificationFilterAnimation(panel, [
-    { height: `${currentHeight}px`, opacity: 1, transform: 'translateY(0)' },
-    { height: '0px', opacity: 0, transform: 'translateY(-5px)' },
-  ], done, false)
-}
-
-function cancelClassificationFilterAnimation(element: Element) {
-  const panel = element as HTMLElement
-  classificationFilterAnimations.get(panel)?.cancel()
-  classificationFilterAnimations.delete(panel)
-}
-
 function selectClassificationFilter(name: string, value: string) {
   const next = { ...selectedClassificationFilters.value }
   if (value) {
@@ -2346,7 +2423,7 @@ async function toggleSystemComparison(row: SystemDocumentRow, event: Event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         selected,
-        allOrders: comparisonAllOrders.value,
+        allOrders: true,
         systems: [{ code: row.code, systemName: row.systemName }],
       }),
     })
@@ -2358,11 +2435,7 @@ async function toggleSystemComparison(row: SystemDocumentRow, event: Event) {
     if (documentRow) {
       documentRow.comparisonSelected = selected
     }
-    if (comparisonAllOrders.value) {
-      await loadComparisonCatalogs()
-    } else if (comparisonOrderIds.value.includes(row.orderId)) {
-      await loadComparisonCatalog(row.orderId)
-    }
+    await loadComparisonCatalogs()
   } catch (error) {
     row.comparisonSelected = previous
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось сохранить выбор для сравнения'
@@ -2388,7 +2461,7 @@ async function toggleAllSystemComparisons(event: Event) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         selected,
-        allOrders: comparisonAllOrders.value,
+        allOrders: true,
         systems: rows.map((row) => ({ code: row.code, systemName: row.systemName })),
       }),
     })
@@ -2678,50 +2751,14 @@ onBeforeUnmount(() => {
 
     <main class="page-main">
       <section v-if="activePage === 'changes'" class="changes-page">
-        <div class="changes-topbar">
-          <div class="select-field">
-            <span>Распоряжения</span>
-            <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-              <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                <span>{{ selectedOrderName() }}</span>
-                <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                  <button
-                    v-for="order in orders"
-                    :key="order.id"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': order.id === selectedOrderId }"
-                    type="button"
-                    @click="selectOrder(order)"
-                  >
-                    {{ order.name }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <div class="changes-refresh-panel">
-            <span>Последнее обновление: {{ formatOrderDateTime(changesPageUpdatedAt()) }}</span>
-            <button type="button" :disabled="isChangesRefreshing" @click="refreshChangesPage">
-              <RefreshCw :class="{ 'is-spinning': isChangesRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              {{ isChangesRefreshing ? 'Обновление…' : 'Обновить' }}
-            </button>
-          </div>
-        </div>
-
         <section class="summary-grid" aria-label="Сводка изменений">
-          <article class="summary-card summary-card--added">
+          <article class="summary-card summary-card--changed">
             <div class="summary-card__icon" aria-hidden="true">
-              <Layers3 :size="34" :stroke-width="1.8" />
+              <Repeat2 :size="34" :stroke-width="1.8" />
             </div>
             <div class="summary-card__content">
-              <span>Добавлено систем</span>
-              <strong>{{ classificationStats.addedSystems }}</strong>
-              <small>{{ addedSystemsHint() }}</small>
+              <span>Изменения в классификации</span>
+              <strong>{{ classificationStats.classificationChanges }}</strong>
             </div>
           </article>
 
@@ -2740,14 +2777,13 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <article class="summary-card summary-card--changed">
+          <article class="summary-card summary-card--added">
             <div class="summary-card__icon" aria-hidden="true">
-              <Repeat2 :size="34" :stroke-width="1.8" />
+              <Layers3 :size="34" :stroke-width="1.8" />
             </div>
             <div class="summary-card__content">
-              <span>Изменения в классификации</span>
-              <strong>{{ classificationStats.classificationChanges }}</strong>
-              <small>{{ classificationStats.classificationChanges ? 'Класс систем изменён' : 'Нет изменений' }}</small>
+              <span>Добавлено систем</span>
+              <strong>{{ classificationStats.addedSystems }}</strong>
             </div>
           </article>
         </section>
@@ -2765,6 +2801,39 @@ onBeforeUnmount(() => {
                 <h2>Фильтры</h2>
               </div>
             </div>
+            <div class="changes-filters__header-actions">
+              <div class="select-field">
+                <span>Распоряжения</span>
+                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
+                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
+                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    <span>{{ selectedOrderName() }}</span>
+                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  </button>
+                  <Transition name="select-menu">
+                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
+                      <button
+                        v-for="order in orders"
+                        :key="order.id"
+                        class="custom-select__option"
+                        :class="{ 'is-selected': order.id === selectedOrderId }"
+                        type="button"
+                        @click="selectOrder(order)"
+                      >
+                        {{ order.name }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
+              <div class="changes-refresh-panel">
+                <button type="button" :class="{ 'is-success': isChangesRefreshDone }" :disabled="isChangesRefreshing" @click="refreshChangesPage">
+                  <CircleCheck v-if="isChangesRefreshDone" :size="18" :stroke-width="1.9" aria-hidden="true" />
+                  <RefreshCw v-else :class="{ 'is-spinning': isChangesRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  {{ isChangesRefreshing ? 'Обновление…' : isChangesRefreshDone ? 'Обновлено' : 'Обновить' }}
+                </button>
+              </div>
+            </div>
           </header>
 
           <div class="changes-filters__group changes-filters__construction">
@@ -2778,7 +2847,7 @@ onBeforeUnmount(() => {
                 type="button"
                 @click="selectConstructionType(type.name)"
               >
-                <span>{{ type.name }}</span>
+                <span>{{ type.label }}</span>
                 <strong>{{ type.count }}</strong>
               </button>
             </div>
@@ -2912,12 +2981,22 @@ onBeforeUnmount(() => {
               </tr>
               <tr v-for="row in visibleClassificationRows()" :key="row.id" tabindex="-1">
                 <td class="changes-system-cell">
-                  <a v-if="row.systemUrl" class="changes-system-link" :href="row.systemUrl" target="_blank" rel="noreferrer">
-                    <span>{{ row.systemName }}</span>
-                    <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
-                  </a>
-                  <span v-else class="changes-system-name">{{ row.systemName }}</span>
-                  <small v-if="row.constructionType === 'Тип не присвоен'" class="construction-type-status">Тип не присвоен</small>
+                  <div class="changes-system-title">
+                    <a v-if="row.systemUrl" class="changes-system-link" :href="row.systemUrl" target="_blank" rel="noreferrer">
+                      <span>{{ row.systemName }}</span>
+                      <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
+                    </a>
+                    <span v-else class="changes-system-name">{{ row.systemName }}</span>
+                    <span
+                      v-if="row.constructionType === 'Тип не присвоен'"
+                      class="construction-type-info"
+                      tabindex="0"
+                      aria-label="Для данной системы параметр Тип строительства не был найден на nav.tn.ru"
+                    >
+                      <Info :size="13" :stroke-width="2.1" aria-hidden="true" />
+                      <span class="construction-type-info__tooltip" role="tooltip">Для данной системы параметр «Тип строительства» не был найден на nav.tn.ru</span>
+                    </span>
+                  </div>
                 </td>
                 <td :class="`changes-status-cell changes-status-cell--${classModifier(row.classBefore) || 'neutral'}`">
                   <span :class="`changes-status changes-status--${classModifier(row.classBefore) || 'neutral'}`">
@@ -2950,7 +3029,6 @@ onBeforeUnmount(() => {
             <label>
               <span>Строк на странице</span>
               <select v-model="classificationPageSize" @change="changeClassificationPageSize">
-                <option value="20">20</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
                 <option value="all">Все</option>
@@ -2966,41 +3044,6 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activePage === 'systems'" class="systems-page">
-        <div class="changes-topbar systems-topbar">
-          <div class="select-field">
-            <span>Распоряжение</span>
-            <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-              <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                <span>{{ selectedOrderName() }}</span>
-                <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                  <button
-                    v-for="order in orders"
-                    :key="order.id"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': order.id === selectedOrderId }"
-                    type="button"
-                    @click="selectOrder(order)"
-                  >
-                    {{ order.name }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <div class="changes-refresh-panel">
-            <span>Последнее обновление: {{ formatOrderDateTime(systemsPageUpdatedAt()) }}</span>
-            <button type="button" :disabled="isSystemsRefreshing" @click="refreshSystemsPage">
-              <RefreshCw :class="{ 'is-spinning': isSystemsRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              {{ isSystemsRefreshing ? 'Обновление…' : 'Обновить' }}
-            </button>
-          </div>
-        </div>
-
         <section class="systems-summary" aria-label="Сводка систем">
           <article class="systems-metric-card">
             <span class="systems-metric-card__accent" aria-hidden="true" />
@@ -3053,6 +3096,39 @@ onBeforeUnmount(() => {
                 <h2>Фильтры</h2>
               </div>
             </div>
+            <div class="changes-filters__header-actions">
+              <div class="select-field">
+                <span>Распоряжение</span>
+                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
+                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
+                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    <span>{{ selectedOrderName() }}</span>
+                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  </button>
+                  <Transition name="select-menu">
+                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
+                      <button
+                        v-for="order in orders"
+                        :key="order.id"
+                        class="custom-select__option"
+                        :class="{ 'is-selected': order.id === selectedOrderId }"
+                        type="button"
+                        @click="selectOrder(order)"
+                      >
+                        {{ order.name }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
+              </div>
+              <div class="changes-refresh-panel">
+                <button type="button" :class="{ 'is-success': isSystemsRefreshDone }" :disabled="isSystemsRefreshing" @click="refreshSystemsPage">
+                  <CircleCheck v-if="isSystemsRefreshDone" :size="18" :stroke-width="1.9" aria-hidden="true" />
+                  <RefreshCw v-else :class="{ 'is-spinning': isSystemsRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  {{ isSystemsRefreshing ? 'Обновление…' : isSystemsRefreshDone ? 'Обновлено' : 'Обновить' }}
+                </button>
+              </div>
+            </div>
           </header>
 
           <div class="changes-filters__group systems-filters__construction">
@@ -3089,7 +3165,7 @@ onBeforeUnmount(() => {
                 <div v-if="isSystemTypesOpen" class="system-type-body">
                   <div class="system-type-grid">
                     <button
-                      v-for="type in systemTypes"
+                      v-for="type in visibleSystemTypes"
                       :key="type.name"
                       class="system-type-card"
                       :class="{ 'is-active': type.name === selectedSystemType.name }"
@@ -3202,7 +3278,14 @@ onBeforeUnmount(() => {
             </span>
             <div class="comparison-table-controls__heading">
               <strong>Добавление в сравнение</strong>
-              <span>Отметьте нужные системы в таблице</span>
+              <span
+                class="comparison-table-controls__help"
+                tabindex="0"
+                aria-label="Отметьте нужные системы в таблице для сравнения изменений класса системы в зависимости от версии распоряжения"
+              >
+                <Info :size="15" :stroke-width="2" aria-hidden="true" />
+                <span role="tooltip">Отметьте нужные системы в таблице для сравнения изменений класса системы в зависимости от версии распоряжения.</span>
+              </span>
             </div>
           </div>
           <div class="comparison-table-controls__actions">
@@ -3216,22 +3299,6 @@ onBeforeUnmount(() => {
               <span aria-hidden="true" />
               <strong>Выбрать все</strong>
             </label>
-            <div class="custom-select" :class="{ 'is-open': openedSelect === 'comparison-scope' }">
-              <button class="custom-select__button" type="button" aria-label="Область применения выбора" :disabled="isBulkComparisonUpdating" @click.stop="toggleSelect('comparison-scope')">
-                <span>{{ comparisonAllOrders ? 'Все распоряжения' : 'Текущее распоряжение' }}</span>
-                <i aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'comparison-scope'" class="custom-select__menu">
-                  <button class="custom-select__option" :class="{ 'is-selected': !comparisonAllOrders }" type="button" @click="comparisonAllOrders = false; openedSelect = null">
-                    Текущее распоряжение
-                  </button>
-                  <button class="custom-select__option" :class="{ 'is-selected': comparisonAllOrders }" type="button" @click="comparisonAllOrders = true; openedSelect = null">
-                    Все распоряжения
-                  </button>
-                </div>
-              </Transition>
-            </div>
           </div>
 
         </section>
@@ -3269,7 +3336,9 @@ onBeforeUnmount(() => {
                 <td class="empty-table-cell" colspan="5">В таблице 3 этого распоряжения пока нет систем</td>
               </tr>
               <tr v-for="row in visibleSystemDocumentRows()" :key="row.id" tabindex="-1">
-                <td class="systems-code-cell"><span>{{ row.code }}</span></td>
+                <td class="systems-code-cell">
+                  <span :class="{ 'systems-code-cell__empty': !row.code.trim() }">{{ row.code.trim() || 'Не присвоен' }}</span>
+                </td>
                 <td class="systems-name-cell">
                   <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
                     {{ row.systemName }}
@@ -3313,7 +3382,6 @@ onBeforeUnmount(() => {
             <label>
               <span>Строк на странице</span>
               <select v-model="systemDocumentPageSize" @change="changeSystemDocumentPageSize">
-                <option value="20">20</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
                 <option value="all">Все</option>
@@ -3330,50 +3398,38 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activePage === 'classification'" class="classification-page">
-        <div class="classification-topline classification-topline--compact">
-          <div class="select-field">
-            <span>Распоряжение</span>
-            <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-              <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                <span>{{ selectedOrderName() }}</span>
-                <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                  <button
-                    v-for="order in orders"
-                    :key="order.id"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': order.id === selectedOrderId }"
-                    type="button"
-                    @click="selectOrder(order)"
-                  >
-                    {{ order.name }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <div class="classification-found">
-            <span class="classification-found__icon" aria-hidden="true">
-              <Layers3 :size="24" :stroke-width="1.8" />
-            </span>
-            <span>
-              <small>Найдено систем</small>
-              <strong>{{ classificationSystems.length }}</strong>
-              <em>{{ isClassificationSearchPending ? 'Обновляем результаты…' : 'по выбранным критериям' }}</em>
-            </span>
-          </div>
-        </div>
-
         <section class="changes-filters classification-page-filters" aria-label="Основные параметры классификации">
           <header class="changes-filters__header">
             <div class="changes-filters__heading">
               <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
               <div>
                 <h2>Основные параметры</h2>
+              </div>
+            </div>
+            <div class="changes-filters__header-actions">
+              <div class="select-field">
+                <span>Распоряжение</span>
+                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
+                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
+                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
+                    <span>{{ selectedOrderName() }}</span>
+                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
+                  </button>
+                  <Transition name="select-menu">
+                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
+                      <button
+                        v-for="order in orders"
+                        :key="order.id"
+                        class="custom-select__option"
+                        :class="{ 'is-selected': order.id === selectedOrderId }"
+                        type="button"
+                        @click="selectOrder(order)"
+                      >
+                        {{ order.name }}
+                      </button>
+                    </div>
+                  </Transition>
+                </div>
               </div>
             </div>
           </header>
@@ -3412,7 +3468,7 @@ onBeforeUnmount(() => {
                 <div v-if="isSystemTypesOpen" class="system-type-body">
                   <div class="system-type-grid">
                     <button
-                      v-for="type in systemTypes"
+                      v-for="type in visibleSystemTypes"
                       :key="type.name"
                       class="system-type-card"
                       :class="{ 'is-active': type.name === selectedSystemType.name }"
@@ -3689,13 +3745,7 @@ onBeforeUnmount(() => {
                   </span>
                   <i aria-hidden="true" />
                 </button>
-                <Transition
-                  :css="false"
-                  @enter="expandClassificationFilter"
-                  @leave="collapseClassificationFilter"
-                  @enter-cancelled="cancelClassificationFilterAnimation"
-                  @leave-cancelled="cancelClassificationFilterAnimation"
-                >
+                <Transition name="classification-filter-options">
                   <div v-if="openedClassificationFilter === filter" class="classification-sidebar__options-shell">
                     <div class="classification-sidebar__options">
                       <button type="button" :class="{ 'is-selected': !selectedClassificationFilters[filter] }" @click="selectClassificationFilter(filter, '')">
@@ -3792,16 +3842,16 @@ onBeforeUnmount(() => {
                   <button
                     class="comparison-add-button"
                     type="button"
-                    :disabled="availableComparisonOrders().length === 0"
+                    :disabled="comparisonOrderIds.length >= MAX_COMPARISON_ORDERS || availableComparisonOrders().length === 0"
                     aria-label="Добавить распоряжение"
-                    :title="availableComparisonOrders().length ? 'Добавить распоряжение' : 'Все распоряжения уже добавлены'"
+                    :title="comparisonOrderIds.length >= MAX_COMPARISON_ORDERS ? 'Можно сравнить не более 6 распоряжений' : availableComparisonOrders().length ? 'Добавить распоряжение' : 'Все распоряжения уже добавлены'"
                     @click.stop="toggleSelect('comparison-add')"
                   >
                     <Plus :size="20" :stroke-width="2" aria-hidden="true" />
                     <span>Добавить распоряжение</span>
                   </button>
                   <Transition name="select-menu">
-                    <div v-if="openedSelect === 'comparison-add' && availableComparisonOrders().length" class="custom-select__menu comparison-add-menu">
+                    <div v-if="openedSelect === 'comparison-add' && comparisonOrderIds.length < MAX_COMPARISON_ORDERS && availableComparisonOrders().length" class="custom-select__menu comparison-add-menu">
                       <button v-for="order in availableComparisonOrders()" :key="order.id" class="custom-select__option" type="button" @click="addComparisonOrder(order)">
                         {{ order.name }}
                       </button>
@@ -3898,7 +3948,10 @@ onBeforeUnmount(() => {
               <tr>
                 <th>Название системы <ArrowDownUp :size="15" :stroke-width="1.7" aria-hidden="true" /></th>
                 <th v-for="(orderId, index) in comparisonOrderIds" :key="orderId">
-                  <span class="comparison-table__order"><i>{{ index + 1 }}</i>{{ comparisonOrderName(orderId) }}</span>
+                  <span class="comparison-table__order">
+                    <i>{{ index + 1 }}</i>
+                    <span :title="comparisonOrderName(orderId)">{{ comparisonOrderName(orderId) }}</span>
+                  </span>
                 </th>
                 <th>Действие</th>
               </tr>
@@ -3947,7 +4000,6 @@ onBeforeUnmount(() => {
             <label>
               <span>Строк на странице</span>
               <select v-model="comparisonPageSize" @change="changeComparisonPageSize">
-                <option value="20">20</option>
                 <option value="50">50</option>
                 <option value="100">100</option>
                 <option value="all">Все</option>
@@ -3978,8 +4030,14 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div class="parser-settings__controls">
-              <button class="import-button parser-settings__button" type="button" :disabled="isNavParsing" @click="runNavParser">
-                {{ isNavParsing ? 'Парсинг выполняется…' : 'Запустить парсер' }}
+              <button
+                class="import-button parser-settings__button"
+                :class="{ 'parser-settings__button--stop': isNavParsing }"
+                type="button"
+                :disabled="isNavParserCancelling"
+                @click="isNavParsing ? cancelNavParser() : runNavParser()"
+              >
+                {{ isNavParserCancelling ? 'Останавливаем…' : isNavParsing ? 'Остановить парсинг' : 'Запустить парсер' }}
               </button>
             </div>
           </div>
@@ -4039,15 +4097,21 @@ onBeforeUnmount(() => {
               </Transition>
             </section>
           </section>
-          <section class="parser-history" aria-labelledby="parser-history-title">
-            <header class="parser-history__header">
-              <div>
-                <h2 id="parser-history-title">Журнал всех запусков</h2>
-              </div>
-              <span>{{ navParserRuns.length }} запусков</span>
-            </header>
-            <p v-if="!navParserRuns.length" class="parser-history__empty">Завершённых запусков пока нет.</p>
-            <div v-else class="parser-history__list">
+          <section class="parser-options-section">
+            <button
+              class="parser-options__toggle"
+              type="button"
+              :aria-expanded="isNavParserHistoryOpen"
+              @click="isNavParserHistoryOpen = !isNavParserHistoryOpen"
+            >
+              <span>Журнал запусков</span>
+              <ChevronDown :class="{ 'is-open': isNavParserHistoryOpen }" :size="17" :stroke-width="1.9" aria-hidden="true" />
+            </button>
+            <Transition name="parser-options">
+              <div v-if="isNavParserHistoryOpen" class="parser-options__shell">
+                <section class="parser-history" aria-label="Журнал запусков">
+                  <p v-if="!navParserRuns.length" class="parser-history__empty">Завершённых запусков пока нет.</p>
+                  <div v-else class="parser-history__list">
               <article v-for="run in navParserRuns" :key="run.id" class="parser-history__run" :class="`is-${run.status}`">
                 <button
                   class="parser-history__run-toggle"
@@ -4057,6 +4121,7 @@ onBeforeUnmount(() => {
                 >
                   <span class="parser-history__status" aria-hidden="true">
                     <CircleCheck v-if="run.status === 'completed'" :size="17" :stroke-width="2" />
+                    <X v-else-if="run.status === 'canceled'" :size="17" :stroke-width="2" />
                     <TriangleAlert v-else :size="17" :stroke-width="2" />
                   </span>
                   <span class="parser-history__identity">
@@ -4082,7 +4147,10 @@ onBeforeUnmount(() => {
                   </div>
                 </Transition>
               </article>
-            </div>
+                  </div>
+                </section>
+              </div>
+            </Transition>
           </section>
           <section class="parser-options-section">
             <button
@@ -4161,6 +4229,7 @@ onBeforeUnmount(() => {
           </details>
         </section>
 
+        <div class="settings-orders-group">
         <section class="settings-section orders-settings" aria-labelledby="orders-db-title">
           <div class="settings-section__header settings-orders-header">
             <div class="settings-orders-heading">
@@ -4225,7 +4294,7 @@ onBeforeUnmount(() => {
                 <tr v-if="!isOrdersLoading && orders.length === 0">
                   <td class="empty-table-cell" colspan="4">Распоряжений пока нет</td>
                 </tr>
-                <tr v-for="order in orders" :key="order.id">
+                <tr v-for="order in visibleOrders" :key="order.id">
                   <td>
                     <span class="settings-order-name">
                       <i aria-hidden="true"><Database :size="17" :stroke-width="1.8" /></i>
@@ -4262,6 +4331,30 @@ onBeforeUnmount(() => {
 
           <p v-if="ordersError" class="table-message table-message--error">{{ ordersError }}</p>
         </section>
+        <footer v-if="!isOrdersLoading && orders.length > 0" class="table-pagination settings-orders-pagination">
+          <span class="table-pagination__range">
+            Показано {{ ordersRangeStart() }}–{{ ordersRangeEnd() }} из {{ orders.length }}
+          </span>
+          <div class="table-pagination__controls">
+            <label>
+              <span>Записей на странице</span>
+              <select v-model="ordersPageSize" @change="changeOrdersPageSize">
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="all">Все</option>
+              </select>
+            </label>
+            <div v-if="ordersPageSize !== 'all'" class="table-pagination__pages">
+              <button type="button" :disabled="ordersPage === 1" aria-label="Предыдущая страница" @click="changeOrdersPage(ordersPage - 1)">‹</button>
+              <strong>{{ ordersPage }} / {{ ordersPageCount() }}</strong>
+              <button type="button" :disabled="ordersPage >= ordersPageCount()" aria-label="Следующая страница" @click="changeOrdersPage(ordersPage + 1)">›</button>
+            </div>
+          </div>
+        </footer>
+        </div>
 
         <section class="settings-section settings-editor" aria-labelledby="edit-db-title">
           <div class="settings-section__header">
@@ -4464,7 +4557,7 @@ onBeforeUnmount(() => {
                 <thead>
                   <tr>
                     <th>Шифр</th>
-                    <th>Название системы</th>
+                    <th>Система</th>
                     <th>Класс</th>
                     <th>
                       <span class="settings-class-header settings-curator-header">
@@ -4561,7 +4654,7 @@ onBeforeUnmount(() => {
                 <small>Комментарии и документы по системам</small>
               </span>
               <label class="settings-search">
-                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или ЕКН" @input="settingsDocumentsPage = 1" />
+                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или шифру" @input="settingsDocumentsPage = 1" />
               </label>
             </div>
 
@@ -4604,9 +4697,18 @@ onBeforeUnmount(() => {
                     <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 3</td>
                   </tr>
                   <tr v-for="row in visibleDocumentRows" :key="`document-${row.id}`">
-                    <td>
-                      <strong>{{ row.systemName }}</strong>
-                      <small class="settings-docs-table__code">{{ row.code }}</small>
+                    <td class="settings-docs-system-cell">
+                      <div class="settings-docs-system">
+                        <span class="settings-docs-system__icon" aria-hidden="true">
+                          <Layers3 :size="19" :stroke-width="1.8" />
+                        </span>
+                        <span class="settings-docs-system__identity">
+                          <strong :title="row.systemName">{{ row.systemName }}</strong>
+                          <small class="settings-docs-table__code" :class="{ 'is-empty': !row.code.trim() }">
+                            {{ row.code.trim() || 'Шифр не присвоен' }}
+                          </small>
+                        </span>
+                      </div>
                     </td>
                     <td>
                       <textarea
@@ -4756,7 +4858,6 @@ onBeforeUnmount(() => {
 
                 <article v-for="row in systemHistoryRows.slice(0, 1)" :key="`history-current-${row.id}`" class="history-entry history-entry--current">
                   <div class="history-entry__order">
-                    <span>Текущая версия</span>
                     <strong>{{ row.orderName }}</strong>
                   </div>
                   <p :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</p>
@@ -4767,7 +4868,10 @@ onBeforeUnmount(() => {
                     <span>{{ row.attachmentName }}</span>
                     <ExternalLink :size="17" :stroke-width="1.8" aria-hidden="true" />
                   </a>
-                  <span v-else class="history-document history-document--empty">Документ не прикреплён</span>
+                  <span v-else class="history-document history-document--empty">
+                    <span class="history-document__empty-icon" aria-hidden="true"><img :src="genericFileIcon" alt="" /></span>
+                    <span>Документ не прикреплён</span>
+                  </span>
                 </article>
               </section>
 
@@ -4797,7 +4901,10 @@ onBeforeUnmount(() => {
                         <span>{{ row.attachmentName }}</span>
                         <ExternalLink :size="17" :stroke-width="1.8" aria-hidden="true" />
                       </a>
-                      <span v-else class="history-document history-document--empty">Документ не прикреплён</span>
+                      <span v-else class="history-document history-document--empty">
+                        <span class="history-document__empty-icon" aria-hidden="true"><img :src="genericFileIcon" alt="" /></span>
+                        <span>Документ не прикреплён</span>
+                      </span>
                     </article>
                   </div>
                 </section>

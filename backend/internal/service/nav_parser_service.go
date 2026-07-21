@@ -27,12 +27,17 @@ type NavParserService struct {
 	repo           *repository.SystemCatalogRepository
 	client         *http.Client
 	parseMu        sync.Mutex
+	cancelMu       sync.Mutex
+	activeCancel   context.CancelFunc
 	progressMu     sync.RWMutex
 	progress       model.NavParserProgress
 	activeSettings model.NavParserSettings
 }
 
-var ErrNavParserRunning = errors.New("NAV parser is already running")
+var (
+	ErrNavParserRunning    = errors.New("NAV parser is already running")
+	ErrNavParserNotRunning = errors.New("NAV parser is not running")
+)
 
 const maxNavParserLogs = 400
 
@@ -75,11 +80,26 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 	if !s.parseMu.TryLock() {
 		return model.NavParseReport{}, ErrNavParserRunning
 	}
-	defer s.parseMu.Unlock()
 	s.beginProgress(source)
+	parseCtx, cancel := context.WithCancel(ctx)
+	s.cancelMu.Lock()
+	s.activeCancel = cancel
+	s.cancelMu.Unlock()
+	ctx = parseCtx
+	defer func() {
+		cancel()
+		s.cancelMu.Lock()
+		s.activeCancel = nil
+		s.cancelMu.Unlock()
+		s.parseMu.Unlock()
+	}()
 	defer func() {
 		if parseErr != nil {
-			s.failProgress(parseErr)
+			if errors.Is(parseErr, context.Canceled) {
+				s.cancelProgress()
+			} else {
+				s.failProgress(parseErr)
+			}
 		}
 	}()
 	settings, err := s.Settings(ctx)
@@ -96,6 +116,9 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 	report = model.NavParseReport{Total: len(rows), NotFound: make([]string, 0), FailedSystems: make([]string, 0)}
 	s.setProgressTotal(len(rows))
 	if len(rows) == 0 {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		if err := s.repo.MarkNavParserRun(ctx); err != nil {
 			return report, err
 		}
@@ -123,6 +146,9 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 	}
 	jobs := make([]parseJob, 0, len(rows))
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		link, ok := linksByName[normalizeSystemName(row.SystemName)]
 		if !ok && settings.FallbackSearch {
 			link, ok = s.searchSystem(ctx, row.SystemName)
@@ -152,6 +178,9 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 		go func() {
 			defer wg.Done()
 			for job := range jobCh {
+				if ctx.Err() != nil {
+					return
+				}
 				characteristics, jobErr := s.scrapeCharacteristics(ctx, job.link.URL)
 				if jobErr == nil {
 					characteristics = append([]model.SystemCharacteristic{{
@@ -163,6 +192,9 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 						characteristics[index].Position = index + 1
 					}
 					jobErr = s.repo.SaveParsed(ctx, job.row.SystemName, job.link.URL, characteristics)
+				}
+				if errors.Is(jobErr, context.Canceled) || ctx.Err() != nil {
+					return
 				}
 				mu.Lock()
 				if jobErr != nil {
@@ -188,6 +220,9 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 	}
 	close(jobCh)
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
 	sort.Strings(report.NotFound)
 	sort.Strings(report.FailedSystems)
 	if report.Failed == 0 {
@@ -198,6 +233,27 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 
 	s.completeProgress(report)
 	return report, nil
+}
+
+func (s *NavParserService) Cancel() error {
+	s.cancelMu.Lock()
+	cancel := s.activeCancel
+	s.cancelMu.Unlock()
+	if cancel == nil {
+		return ErrNavParserNotRunning
+	}
+
+	s.progressMu.Lock()
+	if !s.progress.Running {
+		s.progressMu.Unlock()
+		return ErrNavParserNotRunning
+	}
+	s.progress.Stage = "Отмена"
+	s.progress.Message = "Останавливаем парсинг…"
+	s.appendProgressLogLocked("warning", "Получена команда остановить парсинг")
+	s.progressMu.Unlock()
+	cancel()
+	return nil
 }
 
 func (s *NavParserService) Status() model.NavParserProgress {
@@ -303,6 +359,26 @@ func (s *NavParserService) failProgress(err error) {
 	s.appendProgressLogLocked("error", "Парсинг остановлен: "+err.Error())
 	s.progressMu.Unlock()
 	s.persistProgress("failed")
+}
+
+func (s *NavParserService) cancelProgress() {
+	now := time.Now()
+	s.progressMu.Lock()
+	s.progress.Running = false
+	s.progress.Stage = "Отменено"
+	s.progress.Message = "Парсинг отменён пользователем"
+	s.progress.FinishedAt = &now
+	s.appendProgressLogLocked("warning", "Парсинг отменён пользователем")
+	s.progressMu.Unlock()
+	s.persistProgress("canceled")
+
+	s.progressMu.Lock()
+	s.progress = model.NavParserProgress{
+		Stage:   "Ожидание",
+		Message: "Парсер готов к запуску",
+		Logs:    make([]model.NavParserLogEntry, 0),
+	}
+	s.progressMu.Unlock()
 }
 
 func (s *NavParserService) persistProgress(status string) {
@@ -449,7 +525,7 @@ func (s *NavParserService) runScheduledParseIfDue(ctx context.Context) {
 	if settings.LastRunAt == nil || settings.NextRunAt == nil || time.Now().Before(*settings.NextRunAt) {
 		return
 	}
-	if _, err := s.parse(ctx, "scheduled"); err != nil && !errors.Is(err, ErrNavParserRunning) {
+	if _, err := s.parse(ctx, "scheduled"); err != nil && !errors.Is(err, ErrNavParserRunning) && !errors.Is(err, context.Canceled) {
 		log.Printf("scheduled NAV parsing failed: %v", err)
 	}
 }
