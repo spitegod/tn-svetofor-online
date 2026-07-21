@@ -1,42 +1,11 @@
 package service
 
 import (
-	"strings"
+	"context"
 	"testing"
+
+	"github.com/xuri/excelize/v2"
 )
-
-func TestSystemURLFromSearchSelectsMatchingSystemResult(t *testing.T) {
-	page := `
-		<nav><a href="/systems/ploskaya-krysha/pgs/">Плоская крыша</a></nav>
-		<a href="/systems/stilobaty/other-system/" class="b-search-teaser__title">Другая система</a>
-		<div class="b-search-teaser">
-			<a href="/systems/stilobaty/tn-stilobat-klassik-avto/?sphrase_id=123" class="b-search-teaser__title">
-				<b>ТН-СТИЛОБАТ   КЛАССИК АВТО</b>
-			</a>
-			<div class="b-search-teaser__constr_segment">ПГС</div>
-		</div>`
-
-	got, constructionType := systemDataFromSearch(strings.NewReader(page), "  тн-стилобат классик авто  ")
-	want := "https://nav.tn.ru/systems/stilobaty/tn-stilobat-klassik-avto/"
-	if got != want {
-		t.Fatalf("systemDataFromSearch() URL = %q, want %q", got, want)
-	}
-	if constructionType != "Промышленное и гражданское строительство" {
-		t.Fatalf("systemDataFromSearch() construction type = %q", constructionType)
-	}
-}
-
-func TestSystemURLFromSearchReturnsEmptyWithoutExactMatch(t *testing.T) {
-	page := `<a href="/systems/stilobaty/tn-stilobat-klassik/" class="b-search-teaser__title">ТН-СТИЛОБАТ КЛАССИК</a>`
-
-	got, constructionType := systemDataFromSearch(strings.NewReader(page), "ТН-СТИЛОБАТ КЛАССИК АВТО")
-	if got != "" {
-		t.Fatalf("systemDataFromSearch() URL = %q, want empty URL", got)
-	}
-	if constructionType != unassignedConstructionType {
-		t.Fatalf("systemDataFromSearch() construction type = %q, want %q", constructionType, unassignedConstructionType)
-	}
-}
 
 func TestNormalizeConstructionType(t *testing.T) {
 	tests := map[string]string{
@@ -61,5 +30,26 @@ func TestKnownNAVSystemDataNormalizesSystemPrefix(t *testing.T) {
 	}
 	if got.ConstructionType != "Промышленное и гражданское строительство" {
 		t.Fatalf("knownNAVSystemData() construction type = %q", got.ConstructionType)
+	}
+}
+
+func TestClassificationImportParsingDoesNotRequireNAVNetworkLookup(t *testing.T) {
+	workbook := excelize.NewFile()
+	defer workbook.Close()
+	for cell, value := range map[string]string{
+		"A1": "Название системы", "B1": "Класс", "B2": "было", "C2": "стало",
+		"A3": "Неизвестная система", "B3": "Новая система", "C3": "Разрешенная",
+	} {
+		if err := workbook.SetCellValue("Sheet1", cell, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, err := NewClassificationService(nil).parseSheet(context.Background(), workbook, "Sheet1")
+	if err != nil {
+		t.Fatalf("parse classification: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ConstructionType != unassignedConstructionType {
+		t.Fatalf("unexpected rows: %#v", rows)
 	}
 }

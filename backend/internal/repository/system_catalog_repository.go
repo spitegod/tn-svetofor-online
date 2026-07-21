@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
+	"tn/backend/internal/apperror"
 	"tn/backend/internal/model"
 )
 
@@ -17,48 +20,55 @@ func NewSystemCatalogRepository(db *sql.DB) *SystemCatalogRepository {
 	return &SystemCatalogRepository{db: db}
 }
 
+func (r *SystemCatalogRepository) AcquireNavParserLock(ctx context.Context) (func(), bool, error) {
+	const lockID int64 = 742_190_051
+	connection, err := r.db.Conn(ctx)
+	if err != nil {
+		return nil, false, fmt.Errorf("acquire NAV parser connection: %w", err)
+	}
+
+	var acquired bool
+	if err := connection.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, lockID).Scan(&acquired); err != nil {
+		_ = connection.Close()
+		return nil, false, fmt.Errorf("acquire NAV parser lock: %w", err)
+	}
+	if !acquired {
+		_ = connection.Close()
+		return nil, false, nil
+	}
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_, _ = connection.ExecContext(releaseCtx, `SELECT pg_advisory_unlock($1)`, lockID)
+			_ = connection.Close()
+		})
+	}
+	return release, true, nil
+}
+
 func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64, rows []model.SystemCatalogRow) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin replace system catalog: %w", err)
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-
-	type documentState struct {
-		comment            string
-		comparisonSelected bool
-		attachmentName     string
-		attachmentType     string
-		attachmentSize     int64
-		attachmentData     []byte
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, int64(6_200_000_000)+orderID); err != nil {
+		return fmt.Errorf("lock system catalog import: %w", err)
 	}
-	documentStates := make(map[string]documentState)
-	existing, queryErr := tx.QueryContext(ctx, `
+
+	if _, err = tx.ExecContext(ctx, `
+		CREATE TEMPORARY TABLE preserved_system_document_state ON COMMIT DROP AS
 		SELECT s.code, s.system_name, d.comment, d.comparison_selected,
-			d.attachment_name, d.attachment_content_type, d.attachment_size, d.attachment_data
+			d.attachment_name, d.attachment_content_type, d.attachment_size, d.attachment_data,
+			d.created_at
 		FROM system_documents d
 		JOIN system_catalog s ON s.id = d.system_catalog_id
 		WHERE d.order_id = $1
-	`, orderID)
-	if queryErr != nil {
-		return fmt.Errorf("load system document comments before catalog import: %w", queryErr)
-	}
-	for existing.Next() {
-		var code, name string
-		var state documentState
-		if err = existing.Scan(&code, &name, &state.comment, &state.comparisonSelected,
-			&state.attachmentName, &state.attachmentType, &state.attachmentSize, &state.attachmentData); err != nil {
-			existing.Close()
-			return fmt.Errorf("scan preserved system document comment: %w", err)
-		}
-		documentStates[code+"\x00"+name] = state
-	}
-	if err = existing.Close(); err != nil {
-		return fmt.Errorf("close preserved system document comments: %w", err)
+	`, orderID); err != nil {
+		return fmt.Errorf("preserve system documents before catalog import: %w", err)
 	}
 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM system_catalog WHERE order_id = $1`, orderID); err != nil {
@@ -76,7 +86,6 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 	defer stmt.Close()
 
 	for _, row := range rows {
-		state := documentStates[row.Code+"\x00"+row.SystemName]
 		var systemCatalogID int64
 		if err = stmt.QueryRowContext(ctx, orderID, row.Position, row.Code, row.SystemName, row.SystemURL, row.SystemClass, row.Curator).Scan(&systemCatalogID); err != nil {
 			return fmt.Errorf("insert system catalog row %q: %w", row.Code, err)
@@ -84,11 +93,27 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 		if _, err = tx.ExecContext(ctx, `
 			INSERT INTO system_documents (
 				order_id, system_catalog_id, comment, comparison_selected,
-				attachment_name, attachment_content_type, attachment_size, attachment_data
+				attachment_name, attachment_content_type, attachment_size, attachment_data, created_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		`, orderID, systemCatalogID, state.comment, state.comparisonSelected,
-			state.attachmentName, state.attachmentType, state.attachmentSize, state.attachmentData); err != nil {
+			SELECT $1, $2, state.comment, state.comparison_selected,
+				state.attachment_name, state.attachment_content_type, state.attachment_size,
+				state.attachment_data, state.created_at
+			FROM (
+				SELECT *
+				FROM preserved_system_document_state
+				WHERE (NULLIF(BTRIM($3), '') IS NOT NULL AND code = $3)
+					OR (NULLIF(BTRIM($3), '') IS NULL AND system_name = $4)
+				ORDER BY created_at DESC
+				LIMIT 1
+			) state
+			UNION ALL
+			SELECT $1, $2, '', FALSE, '', '', 0, NULL::BYTEA, NOW()
+			WHERE NOT EXISTS (
+				SELECT 1 FROM preserved_system_document_state state
+				WHERE (NULLIF(BTRIM($3), '') IS NOT NULL AND state.code = $3)
+					OR (NULLIF(BTRIM($3), '') IS NULL AND state.system_name = $4)
+			)
+		`, orderID, systemCatalogID, row.Code, row.SystemName); err != nil {
 			return fmt.Errorf("insert system document row %q: %w", row.Code, err)
 		}
 	}
@@ -113,17 +138,25 @@ func (r *SystemCatalogRepository) Update(ctx context.Context, id int64, orderID 
 
 	var updated model.SystemCatalogRow
 	err = tx.QueryRowContext(ctx, `
-		UPDATE system_catalog
-		SET code = $3, system_name = $4, system_class = $5, curator = $6
-		WHERE id = $1 AND order_id = $2
-		RETURNING id, order_id, position, code, system_name, system_url, system_class, curator, imported_at
+		WITH updated AS (
+			UPDATE system_catalog
+			SET code = $3, system_name = $4, system_class = $5, curator = $6
+			WHERE id = $1 AND order_id = $2
+			RETURNING *
+		)
+		SELECT updated.id, updated.order_id, updated.position, updated.code, updated.system_name,
+			COALESCE(NULLIF(nav.system_url, ''), updated.system_url),
+			updated.system_class, updated.curator, updated.imported_at
+		FROM updated
+		LEFT JOIN nav_systems nav
+			ON nav.system_key = LOWER(REGEXP_REPLACE(BTRIM(updated.system_name), '\s+', ' ', 'g'))
 	`, id, orderID, row.Code, row.SystemName, row.SystemClass, row.Curator).Scan(
 		&updated.ID, &updated.OrderID, &updated.Position, &updated.Code, &updated.SystemName,
 		&updated.SystemURL, &updated.SystemClass, &updated.Curator, &updated.ImportedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return model.SystemCatalogRow{}, fmt.Errorf("system catalog row not found")
+			return model.SystemCatalogRow{}, apperror.New(apperror.NotFound, "system catalog row not found")
 		}
 		return model.SystemCatalogRow{}, fmt.Errorf("update system catalog row: %w", err)
 	}
@@ -147,8 +180,8 @@ func (r *SystemCatalogRepository) List(ctx context.Context, filter model.SystemC
 	}
 
 	if filter.Query != "" {
-		args = append(args, "%"+strings.ToLower(filter.Query)+"%")
-		clauses = append(clauses, fmt.Sprintf("(LOWER(s.system_name) LIKE $%d OR LOWER(s.code) LIKE $%d)", len(args), len(args)))
+		args = append(args, containsLikePattern(filter.Query))
+		clauses = append(clauses, fmt.Sprintf("(LOWER(s.system_name) LIKE $%d ESCAPE '\\' OR LOWER(s.code) LIKE $%d ESCAPE '\\')", len(args), len(args)))
 	}
 
 	if filter.SystemClass != "" {
@@ -325,6 +358,9 @@ func (r *SystemCatalogRepository) SystemTypeImage(ctx context.Context, slug stri
 		FROM nav_system_types
 		WHERE slug = $1 AND image_data IS NOT NULL
 	`, slug).Scan(&image.ContentType, &image.Data); err != nil {
+		if err == sql.ErrNoRows {
+			return model.SystemTypeImage{}, apperror.New(apperror.NotFound, "nav system type image not found")
+		}
 		return model.SystemTypeImage{}, fmt.Errorf("load nav system type image: %w", err)
 	}
 	return image, nil
@@ -334,11 +370,13 @@ func (r *SystemCatalogRepository) NavParserSettings(ctx context.Context) (model.
 	var settings model.NavParserSettings
 	if err := r.db.QueryRowContext(ctx, `
 		SELECT update_interval_days, worker_count, request_timeout_seconds,
-			retry_attempts, retry_delay_seconds, fallback_search, last_run_at
+			retry_attempts, retry_delay_seconds, fallback_search, last_run_at,
+			last_attempt_at, consecutive_failures
 		FROM nav_parser_settings
 		WHERE id = TRUE
 	`).Scan(&settings.UpdateIntervalDays, &settings.WorkerCount, &settings.RequestTimeoutSecs,
-		&settings.RetryAttempts, &settings.RetryDelaySecs, &settings.FallbackSearch, &settings.LastRunAt); err != nil {
+		&settings.RetryAttempts, &settings.RetryDelaySecs, &settings.FallbackSearch, &settings.LastRunAt,
+		&settings.LastAttemptAt, &settings.ConsecutiveFailures); err != nil {
 		return model.NavParserSettings{}, fmt.Errorf("load nav parser settings: %w", err)
 	}
 	return settings, nil
@@ -352,11 +390,13 @@ func (r *SystemCatalogRepository) UpdateNavParserSettings(ctx context.Context, i
 			retry_attempts = $4, retry_delay_seconds = $5, fallback_search = $6
 		WHERE id = TRUE
 		RETURNING update_interval_days, worker_count, request_timeout_seconds,
-			retry_attempts, retry_delay_seconds, fallback_search, last_run_at
+			retry_attempts, retry_delay_seconds, fallback_search, last_run_at,
+			last_attempt_at, consecutive_failures
 	`, input.UpdateIntervalDays, input.WorkerCount, input.RequestTimeoutSecs,
 		input.RetryAttempts, input.RetryDelaySecs, input.FallbackSearch).Scan(
 		&settings.UpdateIntervalDays, &settings.WorkerCount, &settings.RequestTimeoutSecs,
-		&settings.RetryAttempts, &settings.RetryDelaySecs, &settings.FallbackSearch, &settings.LastRunAt); err != nil {
+		&settings.RetryAttempts, &settings.RetryDelaySecs, &settings.FallbackSearch, &settings.LastRunAt,
+		&settings.LastAttemptAt, &settings.ConsecutiveFailures); err != nil {
 		return model.NavParserSettings{}, fmt.Errorf("update nav parser settings: %w", err)
 	}
 	return settings, nil
@@ -365,10 +405,30 @@ func (r *SystemCatalogRepository) UpdateNavParserSettings(ctx context.Context, i
 func (r *SystemCatalogRepository) MarkNavParserRun(ctx context.Context) error {
 	if _, err := r.db.ExecContext(ctx, `
 		UPDATE nav_parser_settings
-		SET last_run_at = NOW()
+		SET last_run_at = NOW(), consecutive_failures = 0
 		WHERE id = TRUE
 	`); err != nil {
 		return fmt.Errorf("mark nav parser run: %w", err)
+	}
+	return nil
+}
+
+func (r *SystemCatalogRepository) MarkNavParserAttempt(ctx context.Context) error {
+	if _, err := r.db.ExecContext(ctx, `
+		UPDATE nav_parser_settings SET last_attempt_at = NOW() WHERE id = TRUE
+	`); err != nil {
+		return fmt.Errorf("mark nav parser attempt: %w", err)
+	}
+	return nil
+}
+
+func (r *SystemCatalogRepository) MarkNavParserFailure(ctx context.Context) error {
+	if _, err := r.db.ExecContext(ctx, `
+		UPDATE nav_parser_settings
+		SET consecutive_failures = LEAST(consecutive_failures + 1, 16)
+		WHERE id = TRUE
+	`); err != nil {
+		return fmt.Errorf("mark nav parser failure: %w", err)
 	}
 	return nil
 }
@@ -402,9 +462,9 @@ func (r *SystemCatalogRepository) SaveNavParserRun(ctx context.Context, run mode
 		DELETE FROM nav_parser_runs
 		WHERE id NOT IN (
 			SELECT id
-			FROM nav_parser_runs
-			ORDER BY started_at DESC, id DESC
-			LIMIT 5
+				FROM nav_parser_runs
+				ORDER BY started_at DESC, id DESC
+				LIMIT 100
 		)
 	`); err != nil {
 		return fmt.Errorf("prune nav parser run history: %w", err)
@@ -445,31 +505,39 @@ func (r *SystemCatalogRepository) NavParserRuns(ctx context.Context, limit int) 
 		return nil, fmt.Errorf("close nav parser runs: %w", err)
 	}
 
+	if len(runs) == 0 {
+		return runs, nil
+	}
+	runIndexes := make(map[int64]int, len(runs))
 	for index := range runs {
-		logs, err := r.db.QueryContext(ctx, `
-			SELECT logged_at, level, message
-			FROM nav_parser_run_logs
-			WHERE run_id = $1
-			ORDER BY id
-		`, runs[index].ID)
-		if err != nil {
-			return nil, fmt.Errorf("list nav parser run logs: %w", err)
+		runIndexes[runs[index].ID] = index
+	}
+	logs, err := r.db.QueryContext(ctx, `
+		SELECT logs.run_id, logs.logged_at, logs.level, logs.message
+		FROM nav_parser_run_logs logs
+		JOIN (
+			SELECT id FROM nav_parser_runs
+			ORDER BY started_at DESC, id DESC
+			LIMIT $1
+		) selected ON selected.id = logs.run_id
+		ORDER BY logs.run_id, logs.id
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list nav parser run logs: %w", err)
+	}
+	defer logs.Close()
+	for logs.Next() {
+		var runID int64
+		var entry model.NavParserLogEntry
+		if err := logs.Scan(&runID, &entry.Time, &entry.Level, &entry.Message); err != nil {
+			return nil, fmt.Errorf("scan nav parser run log: %w", err)
 		}
-		for logs.Next() {
-			var entry model.NavParserLogEntry
-			if err := logs.Scan(&entry.Time, &entry.Level, &entry.Message); err != nil {
-				_ = logs.Close()
-				return nil, fmt.Errorf("scan nav parser run log: %w", err)
-			}
+		if index, exists := runIndexes[runID]; exists {
 			runs[index].Logs = append(runs[index].Logs, entry)
 		}
-		if err := logs.Err(); err != nil {
-			_ = logs.Close()
-			return nil, fmt.Errorf("iterate nav parser run logs: %w", err)
-		}
-		if err := logs.Close(); err != nil {
-			return nil, fmt.Errorf("close nav parser run logs: %w", err)
-		}
+	}
+	if err := logs.Err(); err != nil {
+		return nil, fmt.Errorf("iterate nav parser run logs: %w", err)
 	}
 	return runs, nil
 }
@@ -480,23 +548,21 @@ func (r *SystemCatalogRepository) loadCharacteristics(ctx context.Context, rows 
 	}
 
 	byKey := make(map[string][]*model.SystemCatalogRow, len(rows))
-	keys := make([]any, 0, len(rows))
-	placeholders := make([]string, 0, len(rows))
+	keys := make([]string, 0, len(rows))
 	for index := range rows {
 		key := systemMetadataKey(rows[index].SystemName)
 		if _, exists := byKey[key]; !exists {
 			keys = append(keys, key)
-			placeholders = append(placeholders, fmt.Sprintf("$%d", len(keys)))
 		}
 		byKey[key] = append(byKey[key], &rows[index])
 	}
 
-	result, err := r.db.QueryContext(ctx, fmt.Sprintf(`
+	result, err := r.db.QueryContext(ctx, `
 		SELECT system_key, position, name, value
 		FROM nav_system_characteristics
-		WHERE system_key IN (%s)
+		WHERE system_key = ANY($1::TEXT[])
 		ORDER BY system_key, position
-	`, strings.Join(placeholders, ",")), keys...)
+	`, keys)
 	if err != nil {
 		return fmt.Errorf("load system characteristics: %w", err)
 	}

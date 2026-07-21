@@ -19,16 +19,18 @@ import (
 )
 
 func Run(cfg config.Config) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	database, err := db.Open(ctx, cfg.DatabaseURL)
+	connectCtx, cancelConnect := context.WithTimeout(context.Background(), 10*time.Second)
+	database, err := db.Open(connectCtx, cfg.DatabaseURL)
+	cancelConnect()
 	if err != nil {
 		return err
 	}
 	defer database.Close()
 
-	if err := db.Migrate(ctx, database); err != nil {
+	migrationCtx, cancelMigration := context.WithTimeout(context.Background(), 5*time.Minute)
+	err = db.Migrate(migrationCtx, database)
+	cancelMigration()
+	if err != nil {
 		return err
 	}
 
@@ -39,16 +41,28 @@ func Run(cfg config.Config) error {
 	systemDocumentRepo := repository.NewSystemDocumentRepository(database)
 	systemDocumentService := service.NewSystemDocumentService(systemDocumentRepo)
 	navParserService := service.NewNavParserService(systemCatalogRepo)
+	defer navParserService.Close()
 	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
-	defer stopScheduler()
-	go navParserService.RunScheduler(schedulerCtx)
+	schedulerDone := make(chan struct{})
+	defer func() {
+		stopScheduler()
+		<-schedulerDone
+	}()
+	go func() {
+		defer close(schedulerDone)
+		navParserService.RunScheduler(schedulerCtx)
+	}()
 	orderRepo := repository.NewOrderRepository(database)
 	orderService := service.NewOrderService(orderRepo, classificationService, systemCatalogService)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpdelivery.NewRouter(classificationService, systemCatalogService, systemDocumentService, orderService, navParserService),
+		Handler:           httpdelivery.NewRouter(classificationService, systemCatalogService, systemDocumentService, orderService, navParserService, database),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       2 * time.Minute,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	errCh := make(chan error, 1)
@@ -59,6 +73,7 @@ func Run(cfg config.Config) error {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(stop)
 
 	select {
 	case err := <-errCh:

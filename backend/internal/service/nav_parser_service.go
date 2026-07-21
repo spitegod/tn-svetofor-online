@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -15,23 +16,48 @@ import (
 	"time"
 	"unicode"
 
+	"tn/backend/internal/apperror"
 	"tn/backend/internal/model"
-	"tn/backend/internal/repository"
 
 	"golang.org/x/net/html"
 )
 
 const navBaseURL = "https://nav.tn.ru"
 
+const (
+	maxNavCategories    = 200
+	maxNavCategoryPages = 200
+	maxNavCatalogLinks  = 50_000
+)
+
 type NavParserService struct {
-	repo           *repository.SystemCatalogRepository
+	repo           navParserRepository
 	client         *http.Client
+	lifecycleCtx   context.Context
+	lifecycleStop  context.CancelFunc
 	parseMu        sync.Mutex
+	manualRuns     sync.WaitGroup
 	cancelMu       sync.Mutex
 	activeCancel   context.CancelFunc
 	progressMu     sync.RWMutex
 	progress       model.NavParserProgress
 	activeSettings model.NavParserSettings
+}
+
+type navParserRepository interface {
+	AcquireNavParserLock(context.Context) (func(), bool, error)
+	ParserRows(context.Context) ([]model.SystemCatalogRow, error)
+	SaveParsed(context.Context, string, string, []model.SystemCharacteristic) error
+	ReplaceSystemTypes(context.Context, []model.SystemTypeOption) error
+	SystemTypes(context.Context) ([]model.SystemTypeOption, error)
+	SystemTypeImage(context.Context, string) (model.SystemTypeImage, error)
+	NavParserSettings(context.Context) (model.NavParserSettings, error)
+	UpdateNavParserSettings(context.Context, model.NavParserSettings) (model.NavParserSettings, error)
+	MarkNavParserRun(context.Context) error
+	MarkNavParserAttempt(context.Context) error
+	MarkNavParserFailure(context.Context) error
+	SaveNavParserRun(context.Context, model.NavParserRun) error
+	NavParserRuns(context.Context, int) ([]model.NavParserRun, error)
 }
 
 var (
@@ -57,10 +83,13 @@ type navCategory struct {
 	Position         int
 }
 
-func NewNavParserService(repo *repository.SystemCatalogRepository) *NavParserService {
+func NewNavParserService(repo navParserRepository) *NavParserService {
+	lifecycleCtx, lifecycleStop := context.WithCancel(context.Background())
 	return &NavParserService{
-		repo:   repo,
-		client: &http.Client{Timeout: 35 * time.Second},
+		repo:          repo,
+		client:        newNAVHTTPClient(35 * time.Second),
+		lifecycleCtx:  lifecycleCtx,
+		lifecycleStop: lifecycleStop,
 		progress: model.NavParserProgress{
 			Stage:   "Ожидание",
 			Message: "Парсер готов к запуску",
@@ -76,18 +105,59 @@ func (s *NavParserService) Parse(ctx context.Context) (report model.NavParseRepo
 	return s.parse(ctx, "manual")
 }
 
-func (s *NavParserService) parse(ctx context.Context, source string) (report model.NavParseReport, parseErr error) {
+func (s *NavParserService) StartManual() error {
+	ctx, cancel, release, err := s.prepareParse(s.lifecycleCtx, "manual")
+	if err != nil {
+		return err
+	}
+	s.manualRuns.Add(1)
+	go func() {
+		defer s.manualRuns.Done()
+		if _, err := s.runPreparedParse(ctx, cancel, release); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("manual NAV parsing failed: %v", err)
+		}
+	}()
+	return nil
+}
+
+func (s *NavParserService) Close() {
+	s.lifecycleStop()
+	s.manualRuns.Wait()
+}
+
+func (s *NavParserService) parse(ctx context.Context, source string) (model.NavParseReport, error) {
+	parseCtx, cancel, release, err := s.prepareParse(ctx, source)
+	if err != nil {
+		return model.NavParseReport{}, err
+	}
+	return s.runPreparedParse(parseCtx, cancel, release)
+}
+
+func (s *NavParserService) prepareParse(ctx context.Context, source string) (context.Context, context.CancelFunc, func(), error) {
 	if !s.parseMu.TryLock() {
-		return model.NavParseReport{}, ErrNavParserRunning
+		return nil, nil, nil, ErrNavParserRunning
+	}
+	release, acquired, err := s.repo.AcquireNavParserLock(ctx)
+	if err != nil {
+		s.parseMu.Unlock()
+		return nil, nil, nil, err
+	}
+	if !acquired {
+		s.parseMu.Unlock()
+		return nil, nil, nil, ErrNavParserRunning
 	}
 	s.beginProgress(source)
 	parseCtx, cancel := context.WithCancel(ctx)
 	s.cancelMu.Lock()
 	s.activeCancel = cancel
 	s.cancelMu.Unlock()
-	ctx = parseCtx
+	return parseCtx, cancel, release, nil
+}
+
+func (s *NavParserService) runPreparedParse(ctx context.Context, cancel context.CancelFunc, release func()) (report model.NavParseReport, parseErr error) {
 	defer func() {
 		cancel()
+		release()
 		s.cancelMu.Lock()
 		s.activeCancel = nil
 		s.cancelMu.Unlock()
@@ -99,9 +169,13 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 				s.cancelProgress()
 			} else {
 				s.failProgress(parseErr)
+				s.markFailedAttempt()
 			}
 		}
 	}()
+	if err := s.repo.MarkNavParserAttempt(ctx); err != nil {
+		return model.NavParseReport{}, err
+	}
 	settings, err := s.Settings(ctx)
 	if err != nil {
 		return model.NavParseReport{}, err
@@ -225,10 +299,8 @@ func (s *NavParserService) parse(ctx context.Context, source string) (report mod
 	}
 	sort.Strings(report.NotFound)
 	sort.Strings(report.FailedSystems)
-	if report.Failed == 0 {
-		if err := s.repo.MarkNavParserRun(ctx); err != nil {
-			return report, err
-		}
+	if err := s.repo.MarkNavParserRun(ctx); err != nil {
+		return report, err
 	}
 
 	s.completeProgress(report)
@@ -406,6 +478,14 @@ func (s *NavParserService) persistProgress(status string) {
 	}
 }
 
+func (s *NavParserService) markFailedAttempt() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.repo.MarkNavParserFailure(ctx); err != nil {
+		log.Printf("mark NAV parser failure: %v", err)
+	}
+}
+
 func (s *NavParserService) appendProgressLog(level string, message string) {
 	s.progressMu.Lock()
 	s.appendProgressLogLocked(level, message)
@@ -440,19 +520,19 @@ func (s *NavParserService) Settings(ctx context.Context) (model.NavParserSetting
 
 func (s *NavParserService) UpdateSettings(ctx context.Context, input model.NavParserSettings) (model.NavParserSettings, error) {
 	if input.UpdateIntervalDays < 1 || input.UpdateIntervalDays > 365 {
-		return model.NavParserSettings{}, fmt.Errorf("update interval must be between 1 and 365 days")
+		return model.NavParserSettings{}, apperror.New(apperror.Validation, "update interval must be between 1 and 365 days")
 	}
 	if input.WorkerCount < 1 || input.WorkerCount > 10 {
-		return model.NavParserSettings{}, fmt.Errorf("worker count must be between 1 and 10")
+		return model.NavParserSettings{}, apperror.New(apperror.Validation, "worker count must be between 1 and 10")
 	}
 	if input.RequestTimeoutSecs < 5 || input.RequestTimeoutSecs > 120 {
-		return model.NavParserSettings{}, fmt.Errorf("request timeout must be between 5 and 120 seconds")
+		return model.NavParserSettings{}, apperror.New(apperror.Validation, "request timeout must be between 5 and 120 seconds")
 	}
 	if input.RetryAttempts < 1 || input.RetryAttempts > 5 {
-		return model.NavParserSettings{}, fmt.Errorf("retry attempts must be between 1 and 5")
+		return model.NavParserSettings{}, apperror.New(apperror.Validation, "retry attempts must be between 1 and 5")
 	}
 	if input.RetryDelaySecs < 1 || input.RetryDelaySecs > 30 {
-		return model.NavParserSettings{}, fmt.Errorf("retry delay must be between 1 and 30 seconds")
+		return model.NavParserSettings{}, apperror.New(apperror.Validation, "retry delay must be between 1 and 30 seconds")
 	}
 	settings, err := s.repo.UpdateNavParserSettings(ctx, input)
 	if err != nil {
@@ -531,6 +611,12 @@ func (s *NavParserService) runScheduledParseIfDue(ctx context.Context) {
 }
 
 func withNextNavRun(settings model.NavParserSettings) model.NavParserSettings {
+	if settings.ConsecutiveFailures > 0 && settings.LastAttemptAt != nil {
+		backoffPower := min(settings.ConsecutiveFailures-1, 4)
+		nextRunAt := settings.LastAttemptAt.Add(time.Duration(1<<backoffPower) * time.Hour)
+		settings.NextRunAt = &nextRunAt
+		return settings
+	}
 	if settings.LastRunAt != nil {
 		nextRunAt := settings.LastRunAt.Add(time.Duration(settings.UpdateIntervalDays) * 24 * time.Hour)
 		settings.NextRunAt = &nextRunAt
@@ -608,6 +694,9 @@ func (s *NavParserService) crawlCatalog(ctx context.Context) ([]navSystemLink, e
 		parsedCategories = append(parsedCategories, result.category)
 		for _, link := range result.links {
 			byURL[link.URL] = link
+			if len(byURL) > maxNavCatalogLinks {
+				return nil, fmt.Errorf("nav.tn.ru catalog exceeds %d systems", maxNavCatalogLinks)
+			}
 		}
 	}
 	sort.Slice(parsedCategories, func(left, right int) bool {
@@ -665,7 +754,13 @@ func (s *NavParserService) crawlCategory(ctx context.Context, categoryURL string
 	if title != nil {
 		categoryName = normalizeText(nodeText(title))
 	}
+	if len(categoryName) > maxImportedCellBytes {
+		return nil, "", fmt.Errorf("nav.tn.ru category name is too long")
+	}
 	links := collectSystemLinks(document, categoryName)
+	if len(links) > maxNavCatalogLinks {
+		return nil, "", fmt.Errorf("nav.tn.ru category exceeds %d systems", maxNavCatalogLinks)
+	}
 	pageCount := collectPageCount(document)
 	for page := 2; page <= pageCount; page++ {
 		pageURL := categoryURL + "?PAGEN_1=" + strconv.Itoa(page)
@@ -674,6 +769,9 @@ func (s *NavParserService) crawlCategory(ctx context.Context, categoryURL string
 			return nil, "", fmt.Errorf("load nav.tn.ru category page %s: %w", pageURL, err)
 		}
 		links = append(links, collectSystemLinks(document, categoryName)...)
+		if len(links) > maxNavCatalogLinks {
+			return nil, "", fmt.Errorf("nav.tn.ru category exceeds %d systems", maxNavCatalogLinks)
+		}
 	}
 	return links, categoryName, nil
 }
@@ -704,6 +802,12 @@ func (s *NavParserService) scrapeCharacteristics(ctx context.Context, systemURL 
 		value := normalizeText(nodeText(cells[1]))
 		if name == "" || value == "" || strings.EqualFold(name, "Наименование показателя") {
 			continue
+		}
+		if len(name) > maxImportedCellBytes || len(value) > maxImportedCellBytes {
+			return nil, fmt.Errorf("system characteristic is too long")
+		}
+		if normalizedName := strings.ToLower(strings.TrimSpace(name)); normalizedName == "сегмент строительства" || normalizedName == "тип строительства" {
+			value = normalizeConstructionType(value)
 		}
 		characteristics = append(characteristics, model.SystemCharacteristic{
 			Position: len(characteristics) + 1,
@@ -744,6 +848,9 @@ func (s *NavParserService) fetchDocumentOnce(ctx context.Context, address string
 	if err != nil {
 		return nil, false, err
 	}
+	if err := validateTNURL(request.URL); err != nil {
+		return nil, false, err
+	}
 	request.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TNSvetofor/1.0; +https://nav.tn.ru/)")
 	request.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
 	response, err := s.client.Do(request)
@@ -764,6 +871,9 @@ func (s *NavParserService) fetchImage(ctx context.Context, address string) (stri
 	if err != nil {
 		return "", nil, err
 	}
+	if err := validateTNURL(request.URL); err != nil {
+		return "", nil, err
+	}
 	request.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TNSvetofor/1.0; +https://nav.tn.ru/)")
 	request.Header.Set("Referer", navBaseURL+"/systems/")
 	response, err := s.client.Do(request)
@@ -774,10 +884,6 @@ func (s *NavParserService) fetchImage(ctx context.Context, address string) (stri
 	if response.StatusCode != http.StatusOK {
 		return "", nil, fmt.Errorf("unexpected HTTP status %s", response.Status)
 	}
-	contentType := strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
-	if !strings.HasPrefix(contentType, "image/") {
-		return "", nil, fmt.Errorf("unexpected content type %q", contentType)
-	}
 	const maxImageSize = 4 << 20
 	data, err := io.ReadAll(io.LimitReader(response.Body, maxImageSize+1))
 	if err != nil {
@@ -786,12 +892,31 @@ func (s *NavParserService) fetchImage(ctx context.Context, address string) (stri
 	if len(data) == 0 || len(data) > maxImageSize {
 		return "", nil, fmt.Errorf("invalid image size %d", len(data))
 	}
+	contentType, valid := detectRasterImage(data)
+	if !valid {
+		return "", nil, fmt.Errorf("unsupported or invalid image format")
+	}
 	return contentType, data, nil
+}
+
+func detectRasterImage(data []byte) (string, bool) {
+	switch {
+	case len(data) >= 8 && bytes.Equal(data[:8], []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}):
+		return "image/png", true
+	case len(data) >= 3 && bytes.Equal(data[:3], []byte{0xff, 0xd8, 0xff}):
+		return "image/jpeg", true
+	case len(data) >= 6 && (bytes.Equal(data[:6], []byte("GIF87a")) || bytes.Equal(data[:6], []byte("GIF89a"))):
+		return "image/gif", true
+	case len(data) >= 12 && bytes.Equal(data[:4], []byte("RIFF")) && bytes.Equal(data[8:12], []byte("WEBP")):
+		return "image/webp", true
+	default:
+		return "", false
+	}
 }
 
 func (s *NavParserService) SystemTypeImage(ctx context.Context, slug string) (model.SystemTypeImage, error) {
 	if strings.TrimSpace(slug) == "" {
-		return model.SystemTypeImage{}, fmt.Errorf("system type slug is required")
+		return model.SystemTypeImage{}, apperror.New(apperror.Validation, "system type slug is required")
 	}
 	return s.repo.SystemTypeImage(ctx, slug)
 }
@@ -820,6 +945,9 @@ func collectCategoryURLs(document *html.Node) []navCategory {
 				ImageURL: categoryImageURL(anchor),
 				Position: len(result) + 1,
 			})
+			if len(result) >= maxNavCategories {
+				break
+			}
 		}
 	}
 	return result
@@ -887,7 +1015,7 @@ func collectPageCount(document *html.Node) int {
 		}
 		page, err := strconv.Atoi(parsed.Query().Get("PAGEN_1"))
 		if err == nil && page > pageCount {
-			pageCount = page
+			pageCount = min(page, maxNavCategoryPages)
 		}
 	}
 	return pageCount

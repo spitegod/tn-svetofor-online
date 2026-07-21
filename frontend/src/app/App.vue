@@ -1,40 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import {
-  ArrowDownUp,
-  CalendarDays,
-  ChevronDown,
-  ChevronRight,
-  ChevronUp,
-  CircleCheck,
-  Clock3,
-  CloudUpload,
-  Database,
-  ExternalLink,
-  Folder,
-  FunnelX,
-  Globe2,
-  GripVertical,
-  Grid2X2,
-  House,
-  Info,
-  Layers3,
-  List,
-  ListFilter,
-  Lock,
-  MoreHorizontal,
-  EllipsisVertical,
-  Plus,
-  RefreshCw,
-  Repeat2,
-  Scale,
-  Search,
-  TriangleAlert,
-  Trash2,
-  Unlock,
-  UsersRound,
-  X,
-} from '@lucide/vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import genericFileIcon from 'bootstrap-icons/icons/file-earmark.svg'
 import docFileIcon from 'bootstrap-icons/icons/filetype-doc.svg'
 import docxFileIcon from 'bootstrap-icons/icons/filetype-docx.svg'
@@ -43,203 +8,59 @@ import pdfFileIcon from 'bootstrap-icons/icons/filetype-pdf.svg'
 import pngFileIcon from 'bootstrap-icons/icons/filetype-png.svg'
 import xlsFileIcon from 'bootstrap-icons/icons/filetype-xls.svg'
 import xlsxFileIcon from 'bootstrap-icons/icons/filetype-xlsx.svg'
-import logo from '@/shared/assets/logo.png'
+import { apiFetch, apiURL } from '@/shared/api/client'
+import type {
+  ClassificationChange,
+  ClassificationResponse,
+  ClassificationStats,
+  ComparisonRow,
+  Order,
+  SystemCatalogResponse,
+  SystemCatalogRow,
+  SystemCatalogStats,
+  SystemCharacteristic,
+  SystemDocumentResponse,
+  SystemDocumentRow,
+  SystemTypeOption,
+} from '@/shared/api/types'
+import { usePersistedChoice, usePersistedPageSize } from '@/shared/lib/preferences'
+import AppHeader from '@/widgets/AppHeader.vue'
+import ClassLegendFooter from '@/widgets/ClassLegendFooter.vue'
+import SystemHistoryModal from '@/features/system-history/SystemHistoryModal.vue'
+import { useNavParser } from '@/features/nav-parser/useNavParser'
+import SettingsPage, { type SettingsPageViewModel } from '@/pages/settings/SettingsPage.vue'
+import ComparisonPage, { type ComparisonPageViewModel } from '@/pages/comparison/ComparisonPage.vue'
+import ClassificationPage, { type ClassificationPageViewModel } from '@/pages/classification/ClassificationPage.vue'
+import SystemsPage, { type SystemsPageViewModel } from '@/pages/systems/SystemsPage.vue'
+import ChangesPage, { type ChangesPageViewModel } from '@/pages/changes/ChangesPage.vue'
 
-function persistedPageSize(key: string, fallback: string, allowedValues: string[]) {
-  const storageKey = `tn-svetofor:page-size:${key}`
-  let initialValue = fallback
-  try {
-    const savedValue = window.localStorage.getItem(storageKey)
-    if (savedValue && allowedValues.includes(savedValue)) {
-      initialValue = savedValue
-    }
-  } catch {
-    // The table keeps its fallback when browser storage is unavailable.
-  }
+type FontSizePreset = 'small' | 'standard' | 'large'
 
-  const value = ref(initialValue)
-  watch(value, (nextValue) => {
-    if (!allowedValues.includes(nextValue)) return
-    try {
-      window.localStorage.setItem(storageKey, nextValue)
-    } catch {
-      // Page-size selection still works for the current session.
-    }
-  })
-  return value
+const fontSizePresets: Array<{ key: FontSizePreset; label: string; size: number }> = [
+  { key: 'small', label: 'Маленький', size: 12 },
+  { key: 'standard', label: 'Стандартный', size: 15 },
+  { key: 'large', label: 'Большой', size: 18 },
+]
+
+const fontSizePreset = usePersistedChoice<FontSizePreset>(
+  'tn-svetofor:font-size',
+  'standard',
+  fontSizePresets.map((preset) => preset.key),
+)
+
+const minimumAppFontSize = computed(() => (
+  fontSizePresets.find((preset) => preset.key === fontSizePreset.value)?.size ?? 15
+))
+
+
+const pageKeys = new Set(['changes', 'systems', 'classification', 'comparison', 'settings'])
+
+function pageFromLocation() {
+  const page = window.location.hash.replace(/^#\/?/, '')
+  return pageKeys.has(page) ? page : 'changes'
 }
 
-type ClassificationChange = {
-  id: number
-  orderId: number
-  position: number
-  systemName: string
-  systemUrl: string
-  constructionType: string
-  classBefore: string
-  classAfter: string
-  importedAt: string
-}
-
-type ClassificationStats = {
-  addedSystems: number
-  recommended: number
-  allowed: number
-  classificationChanges: number
-}
-
-type ClassificationResponse = {
-  rows: ClassificationChange[]
-  stats: ClassificationStats
-  beforeOptions: string[]
-  afterOptions: string[]
-}
-
-type SystemCatalogRow = {
-  id: number
-  orderId: number
-  position: number
-  code: string
-  systemName: string
-  systemUrl: string
-  systemClass: string
-  curator: string
-  importedAt: string
-  characteristics: SystemCharacteristic[]
-}
-
-type SystemCharacteristic = {
-  position: number
-  name: string
-  value: string
-}
-
-type NavParseReport = {
-  total: number
-  found: number
-  fallbackFound: number
-  updated: number
-  failed: number
-  failedSystems: string[]
-  notFound: string[]
-}
-
-type NavParserSettings = {
-  updateIntervalDays: number
-  workerCount: number
-  requestTimeoutSeconds: number
-  retryAttempts: number
-  retryDelaySeconds: number
-  fallbackSearch: boolean
-  lastRunAt: string | null
-  nextRunAt: string | null
-}
-
-type NavParserLogEntry = {
-  time: string
-  level: 'info' | 'success' | 'warning' | 'error'
-  message: string
-}
-
-type NavParserProgress = {
-  running: boolean
-  source: 'manual' | 'scheduled' | string
-  stage: string
-  message: string
-  percent: number
-  processed: number
-  total: number
-  found: number
-  updated: number
-  failed: number
-  notFound: number
-  startedAt: string | null
-  finishedAt: string | null
-  logs: NavParserLogEntry[]
-}
-
-type NavParserRun = {
-  id: number
-  source: 'manual' | 'scheduled' | string
-  status: 'completed' | 'failed' | string
-  message: string
-  total: number
-  found: number
-  updated: number
-  failed: number
-  notFound: number
-  startedAt: string
-  finishedAt: string
-  logs: NavParserLogEntry[]
-}
-
-type SystemCatalogStats = {
-  total: number
-  recommended: number
-  allowed: number
-  forbidden: number
-  curators: number
-}
-
-type SystemCatalogResponse = {
-  rows: SystemCatalogRow[]
-  stats: SystemCatalogStats
-  classOptions: string[]
-  curatorOptions: string[]
-  systemTypes: SystemTypeOption[]
-}
-
-type SystemDocumentRow = {
-  id: number
-  orderId: number
-  orderName: string
-  systemCatalogId: number
-  position: number
-  code: string
-  systemName: string
-  systemUrl: string
-  systemClass: string
-  curator: string
-  comparisonSelected: boolean
-  comment: string
-  attachmentName: string
-  attachmentType: string
-  attachmentSize: number
-  createdAt: string
-  updatedAt: string
-  characteristics: SystemCharacteristic[]
-}
-
-type SystemDocumentResponse = {
-  rows: SystemDocumentRow[]
-  stats: SystemCatalogStats
-  classOptions: string[]
-  curatorOptions: string[]
-}
-
-type SystemTypeOption = {
-  slug: string
-  name: string
-  imageUrl: string
-  position: number
-}
-
-type Order = {
-  id: number
-  name: string
-  createdAt: string
-  updatedAt: string
-}
-
-type ComparisonRow = {
-  key: string
-  name: string
-  values: string[]
-}
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api'
-
-const activePage = ref('changes')
+const activePage = ref(pageFromLocation())
 const isScrollTopVisible = ref(false)
 
 const navItems = [
@@ -263,7 +84,7 @@ const classOptions = ['Разрешенная', 'Рекомендованная'
 const curatorOptions = ['Все кураторы', 'Сендецкий В.', 'Уртенков А.', 'Золотарев М.', 'Кузнецова Н.']
 
 const orders = ref<Order[]>([])
-const ordersPageSize = persistedPageSize('settings-orders', '10', ['5', '10', '20', '50', '100', 'all'])
+const ordersPageSize = usePersistedPageSize('settings-orders', '10', ['5', '10', '20', '50', '100', 'all'])
 const ordersPage = ref(1)
 const selectedOrderId = ref<number | null>(null)
 const MAX_COMPARISON_ORDERS = 6
@@ -275,7 +96,7 @@ const isBulkComparisonUpdating = ref(false)
 const hiddenComparisonRows = ref<string[]>([])
 const comparisonOnlyDifferences = ref(false)
 const comparisonSort = ref<'differences-first' | 'name-asc' | 'name-desc'>('differences-first')
-const comparisonPageSize = persistedPageSize('comparison', '50', ['50', '100', 'all'])
+const comparisonPageSize = usePersistedPageSize('comparison', '50', ['50', '100', 'all'])
 const comparisonPage = ref(1)
 const isComparisonLoading = ref(true)
 const comparisonError = ref('')
@@ -287,9 +108,18 @@ const orderRenameTimers = new Map<number, ReturnType<typeof window.setTimeout>>(
 const classificationEditTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 const systemCatalogEditTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
 const documentCommentTimers = new Map<number, ReturnType<typeof window.setTimeout>>()
+const orderRenameControllers = new Map<number, AbortController>()
+const classificationEditControllers = new Map<number, AbortController>()
+const systemCatalogEditControllers = new Map<number, AbortController>()
+const documentCommentControllers = new Map<number, AbortController>()
 let systemDocumentSearchTimer: ReturnType<typeof window.setTimeout> | null = null
 let classificationSearchTimer: ReturnType<typeof window.setTimeout> | null = null
 let classificationFilterFeedbackTimer: ReturnType<typeof window.setTimeout> | null = null
+let classificationRequestController: AbortController | null = null
+let systemCatalogRequestController: AbortController | null = null
+let classificationCatalogRequestController: AbortController | null = null
+let systemDocumentRequestController: AbortController | null = null
+let documentTableRequestController: AbortController | null = null
 const selectedSystemTypeSlug = ref('')
 const isSystemTypesOpen = ref(false)
 const selectedHistorySystem = ref<SystemDocumentRow | null>(null)
@@ -304,9 +134,9 @@ const importFileInput = ref<HTMLInputElement | null>(null)
 const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
 const orderWorkbookInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
-const classificationPageSize = persistedPageSize('changes', '50', ['50', '100', 'all'])
+const classificationPageSize = usePersistedPageSize('changes', '50', ['50', '100', 'all'])
 const classificationPage = ref(1)
-const settingsClassificationPageSize = persistedPageSize('settings-table-1', '10', ['10', '20', '50', '100', 'all'])
+const settingsClassificationPageSize = usePersistedPageSize('settings-table-1', '10', ['10', '20', '50', '100', 'all'])
 const settingsClassificationPage = ref(1)
 const isSettingsClassificationUnlocked = ref(false)
 const classificationStats = ref<ClassificationStats>({
@@ -341,11 +171,11 @@ const activeChangeFilterCount = computed(() => [
 ].filter(Boolean).length)
 const hasActiveChangeFilters = computed(() => activeChangeFilterCount.value > 0)
 const systemCatalogRows = ref<SystemCatalogRow[]>([])
-const settingsSystemCatalogPageSize = persistedPageSize('settings-table-2', '10', ['10', '20', '50', '100', 'all'])
+const settingsSystemCatalogPageSize = usePersistedPageSize('settings-table-2', '10', ['10', '20', '50', '100', 'all'])
 const settingsSystemCatalogPage = ref(1)
 const isSettingsSystemCatalogUnlocked = ref(false)
 const systemDocumentRows = ref<SystemDocumentRow[]>([])
-const systemDocumentPageSize = persistedPageSize('systems', '50', ['50', '100', 'all'])
+const systemDocumentPageSize = usePersistedPageSize('systems', '50', ['50', '100', 'all'])
 const systemDocumentPage = ref(1)
 const systemsConstructionTypes = computed(() => constructionTypes.map((name) => ({
   name,
@@ -353,7 +183,7 @@ const systemsConstructionTypes = computed(() => constructionTypes.map((name) => 
 })))
 const documentRows = ref<SystemDocumentRow[]>([])
 const documentSearch = ref('')
-const settingsDocumentsPageSize = persistedPageSize('settings-table-3', '10', ['10', '20', '50', '100', 'all'])
+const settingsDocumentsPageSize = usePersistedPageSize('settings-table-3', '10', ['10', '20', '50', '100', 'all'])
 const settingsDocumentsPage = ref(1)
 const documentError = ref('')
 const isDocumentTableLoading = ref(true)
@@ -362,7 +192,7 @@ const classificationCatalogSearch = ref('')
 const classificationCatalogSearchInput = ref('')
 const isClassificationSearchPending = ref(false)
 const classificationView = ref<'grid' | 'list'>('grid')
-const classificationCatalogPageSize = persistedPageSize('classification', '50', ['50', '100', '200', 'all'])
+const classificationCatalogPageSize = usePersistedPageSize('classification', '50', ['50', '100', '200', 'all'])
 const classificationCatalogPage = ref(1)
 const isClassificationCatalogLoading = ref(true)
 const classificationCatalogError = ref('')
@@ -514,47 +344,53 @@ const activeSystemFilterCount = computed(() => [
   selectedSystemTypeSlug.value !== '',
 ].filter(Boolean).length)
 const hasActiveSystemFilters = computed(() => activeSystemFilterCount.value > 0)
-const isNavParsing = ref(false)
-const isNavParserCancelling = ref(false)
-const navParseMessage = ref('')
-const navParseError = ref('')
-const navParseNotFound = ref<string[]>([])
-const navParserIntervalDays = ref(7)
-const navParserProgress = ref<NavParserProgress>({
-  running: false,
-  source: 'manual',
-  stage: 'Ожидание',
-  message: 'Парсер готов к запуску',
-  percent: 0,
-  processed: 0,
-  total: 0,
-  found: 0,
-  updated: 0,
-  failed: 0,
-  notFound: 0,
-  startedAt: null,
-  finishedAt: null,
-  logs: [],
+const {
+  cancelNavParser,
+  formatNavParserLogTime,
+  formatNavParserRunDate,
+  formatNavParserRunDuration,
+  isNavParserCancelling,
+  isNavParserHistoryOpen,
+  isNavParserLogOpen,
+  isNavParserSettingsOpen,
+  isNavParsing,
+  isNavSettingsSaving,
+  loadNavParserProgress,
+  loadNavParserRuns,
+  loadNavParserSettings,
+  navParseError,
+  navParseFailedSystems,
+  navParseMessage,
+  navParseNotFound,
+  navParserFallbackSearch,
+  navParserIntervalDays,
+  navParserLogsNewestFirst,
+  navParserNextRunLabel,
+  navParserProgress,
+  navParserRequestTimeout,
+  navParserRetryAttempts,
+  navParserRetryDelay,
+  navParserRunLogsNewestFirst,
+  navParserRuns,
+  navParserSourceLabel,
+  navParserWorkerCount,
+  navSettingsError,
+  navSettingsMessage,
+  openedNavParserRunId,
+  runNavParser,
+  saveNavParserSettings,
+  stopNavParserPolling,
+} = useNavParser({
+  onCatalogsInvalidated: () => {
+    selectedClassificationFilters.value = {}
+    return Promise.all([
+      loadSystemCatalog(),
+      loadClassificationCatalog(),
+      loadSystemDocuments(),
+      loadDocumentTable(),
+    ]).then(() => undefined)
+  },
 })
-const navParserLogsNewestFirst = computed(() => [...navParserProgress.value.logs].reverse())
-const navParserRuns = ref<NavParserRun[]>([])
-const isNavParserLogOpen = ref(false)
-const isNavParserHistoryOpen = ref(false)
-const openedNavParserRunId = ref<number | null>(null)
-const navParseFailedSystems = ref<string[]>([])
-const navParserWorkerCount = ref(4)
-const navParserRequestTimeout = ref(35)
-const navParserRetryAttempts = ref(3)
-const navParserRetryDelay = ref(2)
-const navParserFallbackSearch = ref(true)
-const navParserNextRunAt = ref<string | null>(null)
-const isNavParserSettingsOpen = ref(false)
-const isNavSettingsSaving = ref(false)
-const navSettingsMessage = ref('')
-const navSettingsError = ref('')
-let navParserPollTimer: ReturnType<typeof window.setInterval> | null = null
-let navParserRequestPending = false
-let navParserCancelRequested = false
 
 function selectedOrderName() {
   return orders.value.find((order) => order.id === selectedOrderId.value)?.name ?? 'Распоряжение не выбрано'
@@ -728,7 +564,7 @@ async function loadOrders() {
   ordersError.value = ''
 
   try {
-    const response = await fetch(`${API_BASE_URL}/orders`)
+    const response = await apiFetch(`/orders`)
     if (!response.ok) {
       throw new Error('Не удалось загрузить распоряжения')
     }
@@ -784,7 +620,7 @@ async function loadComparisonCatalog(orderId: number) {
   comparisonError.value = ''
 
   const query = new URLSearchParams({ orderId: String(orderId), comparison: 'true' })
-  const response = await fetch(`${API_BASE_URL}/system-documents?${query.toString()}`)
+  const response = await apiFetch(`/system-documents?${query.toString()}`)
   if (!response.ok) {
     throw new Error('Не удалось загрузить данные сравнения')
   }
@@ -828,7 +664,7 @@ async function createOrder() {
     return
   }
 
-  const response = await fetch(`${API_BASE_URL}/orders`, {
+  const response = await apiFetch(`/orders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: name.trim() }),
@@ -862,7 +698,7 @@ async function importOrderWorkbook(event: Event) {
   ordersError.value = ''
 
   try {
-    const response = await fetch(`${API_BASE_URL}/orders/import`, {
+    const response = await apiFetch(`/orders/import`, {
       method: 'POST',
       body: formData,
     })
@@ -888,7 +724,7 @@ async function deleteOrder(order: Order) {
     return
   }
 
-  const response = await fetch(`${API_BASE_URL}/orders/${order.id}`, { method: 'DELETE' })
+  const response = await apiFetch(`/orders/${order.id}`, { method: 'DELETE' })
   if (!response.ok) {
     const payload = await response.json().catch(() => null)
     ordersError.value = payload?.error ?? 'Не удалось удалить распоряжение'
@@ -935,11 +771,16 @@ async function saveOrderName(order: Order) {
     return
   }
 
+  orderRenameControllers.get(order.id)?.abort()
+  const controller = new AbortController()
+  orderRenameControllers.set(order.id, controller)
+
   try {
-    const response = await fetch(`${API_BASE_URL}/orders/${order.id}`, {
+    const response = await apiFetch(`/orders/${order.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: nextName }),
+      signal: controller.signal,
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
@@ -953,7 +794,12 @@ async function saveOrderName(order: Order) {
     }
     ordersError.value = ''
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     ordersError.value = error instanceof Error ? error.message : 'Не удалось сохранить название распоряжения'
+  } finally {
+    if (orderRenameControllers.get(order.id) === controller) {
+      orderRenameControllers.delete(order.id)
+    }
   }
 }
 
@@ -1171,7 +1017,7 @@ async function exportComparisonTable() {
   const headers = ['Название системы', ...comparisonOrderIds.value.map(comparisonOrderName)]
   const rows = comparisonRows().map((row) => [row.name, ...row.values])
 
-  const response = await fetch(`${API_BASE_URL}/comparison/export`, {
+  const response = await apiFetch(`/comparison/export`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ headers, rows }),
@@ -1216,6 +1062,9 @@ function applyClassificationPayload(payload: ClassificationResponse) {
 }
 
 async function loadClassificationChanges() {
+  classificationRequestController?.abort()
+  const controller = new AbortController()
+  classificationRequestController = controller
   isClassificationLoading.value = true
   classificationLoadingMessage.value = 'Загрузка таблицы...'
   classificationError.value = ''
@@ -1225,16 +1074,20 @@ async function loadClassificationChanges() {
     if (selectedOrderId.value) {
       query.set('orderId', String(selectedOrderId.value))
     }
-    const response = await fetch(`${API_BASE_URL}/classification-changes?${query.toString()}`)
+    const response = await apiFetch(`/classification-changes?${query.toString()}`, { signal: controller.signal })
     if (!response.ok) {
       throw new Error('Не удалось загрузить таблицу 1')
     }
 
     applyClassificationPayload(await response.json())
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     classificationError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 1'
   } finally {
-    isClassificationLoading.value = false
+    if (classificationRequestController === controller) {
+      classificationRequestController = null
+      isClassificationLoading.value = false
+    }
   }
 }
 
@@ -1259,7 +1112,7 @@ async function importTableFile(event: Event) {
   classificationError.value = ''
 
   try {
-    const response = await fetch(`${API_BASE_URL}/classification-changes/import`, {
+    const response = await apiFetch(`/classification-changes/import`, {
       method: 'POST',
       body: formData,
     })
@@ -1285,7 +1138,7 @@ async function exportClassificationTable() {
   if (selectedConstructionType.value && selectedConstructionType.value !== 'Все') {
     query.set('constructionType', selectedConstructionType.value)
   }
-  const response = await fetch(`${API_BASE_URL}/classification-changes/export?${query.toString()}`)
+  const response = await apiFetch(`/classification-changes/export?${query.toString()}`)
   if (!response.ok) {
     classificationError.value = 'Не удалось экспортировать таблицу'
     return
@@ -1418,12 +1271,16 @@ async function saveClassificationRow(row: ClassificationChange) {
     classBefore: row.classBefore,
     classAfter: row.classAfter,
   }
+  classificationEditControllers.get(row.id)?.abort()
+  const controller = new AbortController()
+  classificationEditControllers.set(row.id, controller)
   try {
     const query = new URLSearchParams({ orderId: String(row.orderId) })
-    const response = await fetch(`${API_BASE_URL}/classification-changes/${row.id}?${query.toString()}`, {
+    const response = await apiFetch(`/classification-changes/${row.id}?${query.toString()}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(submitted),
+      signal: controller.signal,
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
@@ -1437,7 +1294,12 @@ async function saveClassificationRow(row: ClassificationChange) {
     }
     classificationError.value = ''
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     classificationError.value = error instanceof Error ? error.message : 'Не удалось сохранить строку таблицы 1'
+  } finally {
+    if (classificationEditControllers.get(row.id) === controller) {
+      classificationEditControllers.delete(row.id)
+    }
   }
 }
 
@@ -1468,6 +1330,9 @@ function applySystemCatalogPayload(payload: SystemCatalogResponse) {
 }
 
 async function loadClassificationCatalog() {
+  classificationCatalogRequestController?.abort()
+  const controller = new AbortController()
+  classificationCatalogRequestController = controller
   isClassificationCatalogLoading.value = true
   classificationCatalogError.value = ''
 
@@ -1477,7 +1342,7 @@ async function loadClassificationCatalog() {
       query.set('orderId', String(selectedOrderId.value))
     }
 
-    const response = await fetch(`${API_BASE_URL}/system-catalog?${query.toString()}`)
+    const response = await apiFetch(`/system-catalog?${query.toString()}`, { signal: controller.signal })
     if (!response.ok) {
       throw new Error('Не удалось загрузить системы из таблицы 2')
     }
@@ -1486,13 +1351,20 @@ async function loadClassificationCatalog() {
     classificationCatalogRows.value = payload.rows
     parsedSystemTypes.value = payload.systemTypes ?? parsedSystemTypes.value
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     classificationCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить системы из таблицы 2'
   } finally {
-    isClassificationCatalogLoading.value = false
+    if (classificationCatalogRequestController === controller) {
+      classificationCatalogRequestController = null
+      isClassificationCatalogLoading.value = false
+    }
   }
 }
 
 async function loadSystemCatalog(silent = false) {
+  systemCatalogRequestController?.abort()
+  const controller = new AbortController()
+  systemCatalogRequestController = controller
   if (!silent) {
     isSystemCatalogLoading.value = true
   }
@@ -1500,7 +1372,7 @@ async function loadSystemCatalog(silent = false) {
 
   try {
     const query = buildSystemCatalogQuery()
-    const response = await fetch(`${API_BASE_URL}/system-catalog?${query.toString()}`)
+    const response = await apiFetch(`/system-catalog?${query.toString()}`, { signal: controller.signal })
     if (!response.ok) {
       throw new Error('Не удалось загрузить таблицу 2')
     }
@@ -1508,9 +1380,11 @@ async function loadSystemCatalog(silent = false) {
     const payload: SystemCatalogResponse = await response.json()
     applySystemCatalogPayload(payload)
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 2'
   } finally {
-    if (!silent) {
+    if (systemCatalogRequestController === controller) {
+      systemCatalogRequestController = null
       isSystemCatalogLoading.value = false
     }
   }
@@ -1536,7 +1410,7 @@ async function importSystemCatalogFile(event: Event) {
   systemCatalogError.value = ''
 
   try {
-    const response = await fetch(`${API_BASE_URL}/system-catalog/import`, {
+    const response = await apiFetch(`/system-catalog/import`, {
       method: 'POST',
       body: formData,
     })
@@ -1572,7 +1446,7 @@ async function exportSystemCatalog() {
   if (selectedSystemTypeSlug.value) {
     query.set('systemType', selectedSystemType.value.name)
   }
-  const response = await fetch(`${API_BASE_URL}/system-documents/export?${query.toString()}`)
+  const response = await apiFetch(`/system-documents/export?${query.toString()}`)
   if (!response.ok) {
     systemCatalogError.value = 'Не удалось экспортировать таблицу 2'
     return
@@ -1585,249 +1459,6 @@ async function exportSystemCatalog() {
   link.download = 'system-documents.xlsx'
   link.click()
   URL.revokeObjectURL(url)
-}
-
-async function runNavParser() {
-  if (isNavParsing.value) {
-    return
-  }
-
-  navParserRequestPending = true
-  navParserCancelRequested = false
-  isNavParsing.value = true
-  navParseMessage.value = ''
-  navParseError.value = ''
-  navParseNotFound.value = []
-  navParseFailedSystems.value = []
-  isNavParserLogOpen.value = true
-  startNavParserPolling()
-  try {
-    const response = await fetch(`${API_BASE_URL}/system-catalog/parse-nav`, { method: 'POST' })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      if (response.status === 409) {
-        await loadNavParserProgress()
-        return
-      }
-      throw new Error(payload?.error ?? 'Не удалось выполнить парсинг nav.tn.ru')
-    }
-
-    const report: NavParseReport = await response.json()
-    navParseMessage.value = `Обновлено ${report.updated} из ${report.total}. Через резервный поиск: ${report.fallbackFound}, не найдено: ${report.notFound.length}, ошибок: ${report.failed}.`
-    navParseNotFound.value = report.notFound
-    navParseFailedSystems.value = report.failedSystems ?? []
-    selectedClassificationFilters.value = {}
-    await Promise.all([loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings()])
-  } catch (error) {
-    if (navParserCancelRequested) {
-      navParseMessage.value = 'Парсинг отменён'
-    } else {
-      navParseError.value = error instanceof Error ? error.message : 'Не удалось выполнить парсинг nav.tn.ru'
-    }
-  } finally {
-    navParserRequestPending = false
-    await Promise.all([loadNavParserProgress(), loadNavParserRuns()])
-    isNavParsing.value = navParserProgress.value.running
-    navParserCancelRequested = false
-    if (!navParserProgress.value.running) {
-      stopNavParserPolling()
-    }
-  }
-}
-
-async function cancelNavParser() {
-  if (!isNavParsing.value || isNavParserCancelling.value) {
-    return
-  }
-
-  isNavParserCancelling.value = true
-  navParserCancelRequested = true
-  navParseError.value = ''
-  try {
-    const response = await fetch(`${API_BASE_URL}/nav-parser/cancel`, { method: 'POST' })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      if (response.status !== 409) {
-        throw new Error(payload?.error ?? 'Не удалось остановить парсинг')
-      }
-    }
-    await Promise.all([loadNavParserProgress(), loadNavParserRuns()])
-  } catch (error) {
-    navParserCancelRequested = false
-    navParseError.value = error instanceof Error ? error.message : 'Не удалось остановить парсинг'
-  } finally {
-    isNavParserCancelling.value = false
-  }
-}
-
-async function loadNavParserProgress() {
-  try {
-    const wasRunning = navParserProgress.value.running
-    const response = await fetch(`${API_BASE_URL}/nav-parser/status`)
-    if (!response.ok) {
-      throw new Error('Не удалось загрузить прогресс парсера')
-    }
-    const progress: NavParserProgress = await response.json()
-    navParserProgress.value = { ...progress, logs: progress.logs ?? [] }
-    if (navParserProgress.value.running) {
-      isNavParserLogOpen.value = true
-    } else if (navParserProgress.value.logs.length === 0) {
-      isNavParserLogOpen.value = false
-    }
-    isNavParsing.value = navParserProgress.value.running || navParserRequestPending
-    if (navParserProgress.value.running && !navParserPollTimer) {
-      startNavParserPolling()
-    }
-    if (wasRunning && !navParserProgress.value.running) {
-      navParserCancelRequested = false
-      void loadNavParserRuns()
-    }
-  } catch (error) {
-    if (navParserRequestPending) {
-      navParseError.value = error instanceof Error ? error.message : 'Не удалось загрузить прогресс парсера'
-    }
-  }
-}
-
-async function loadNavParserRuns() {
-  try {
-    const response = await fetch(`${API_BASE_URL}/nav-parser/runs?limit=5`)
-    if (!response.ok) {
-      throw new Error('Не удалось загрузить историю запусков')
-    }
-    const runs: NavParserRun[] | null = await response.json()
-    navParserRuns.value = (runs ?? []).map((run) => ({ ...run, logs: run.logs ?? [] }))
-  } catch (error) {
-    navSettingsError.value = error instanceof Error ? error.message : 'Не удалось загрузить историю запусков'
-  }
-}
-
-function startNavParserPolling() {
-  if (navParserPollTimer) {
-    return
-  }
-  void loadNavParserProgress()
-  navParserPollTimer = window.setInterval(() => {
-    void loadNavParserProgress().then(() => {
-      if (!navParserProgress.value.running && !navParserRequestPending) {
-        stopNavParserPolling()
-      }
-    })
-  }, 750)
-}
-
-function stopNavParserPolling() {
-  if (!navParserPollTimer) {
-    return
-  }
-  window.clearInterval(navParserPollTimer)
-  navParserPollTimer = null
-}
-
-function formatNavParserLogTime(value: string) {
-  if (!value) {
-    return '—'
-  }
-  return new Intl.DateTimeFormat('ru-RU', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(new Date(value))
-}
-
-function formatNavParserRunDate(value: string) {
-  return new Intl.DateTimeFormat('ru-RU', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
-}
-
-function formatNavParserRunDuration(run: NavParserRun) {
-  const seconds = Math.max(0, Math.round((new Date(run.finishedAt).getTime() - new Date(run.startedAt).getTime()) / 1000))
-  if (seconds < 60) {
-    return `${seconds} сек.`
-  }
-  const minutes = Math.floor(seconds / 60)
-  const remainder = seconds % 60
-  return remainder ? `${minutes} мин. ${remainder} сек.` : `${minutes} мин.`
-}
-
-function navParserSourceLabel(source: string) {
-  return source === 'scheduled' ? 'По расписанию' : 'Ручной запуск'
-}
-
-function navParserRunLogsNewestFirst(run: NavParserRun) {
-  return [...run.logs].reverse()
-}
-
-async function loadNavParserSettings() {
-  try {
-    const response = await fetch(`${API_BASE_URL}/nav-parser/settings`)
-    if (!response.ok) {
-      throw new Error('Не удалось загрузить настройки парсера')
-    }
-    const settings: NavParserSettings = await response.json()
-    applyNavParserSettings(settings)
-    navSettingsError.value = ''
-  } catch (error) {
-    navSettingsError.value = error instanceof Error ? error.message : 'Не удалось загрузить настройки парсера'
-  }
-}
-
-async function saveNavParserSettings() {
-  const days = Math.min(365, Math.max(1, Math.round(Number(navParserIntervalDays.value) || 1)))
-  navParserIntervalDays.value = days
-  navParserWorkerCount.value = Math.min(10, Math.max(1, Math.round(Number(navParserWorkerCount.value) || 4)))
-  navParserRequestTimeout.value = Math.min(120, Math.max(5, Math.round(Number(navParserRequestTimeout.value) || 35)))
-  navParserRetryAttempts.value = Math.min(5, Math.max(1, Math.round(Number(navParserRetryAttempts.value) || 3)))
-  navParserRetryDelay.value = Math.min(30, Math.max(1, Math.round(Number(navParserRetryDelay.value) || 2)))
-  isNavSettingsSaving.value = true
-  navSettingsMessage.value = ''
-  navSettingsError.value = ''
-  try {
-    const response = await fetch(`${API_BASE_URL}/nav-parser/settings`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        updateIntervalDays: days,
-        workerCount: navParserWorkerCount.value,
-        requestTimeoutSeconds: navParserRequestTimeout.value,
-        retryAttempts: navParserRetryAttempts.value,
-        retryDelaySeconds: navParserRetryDelay.value,
-        fallbackSearch: navParserFallbackSearch.value,
-      }),
-    })
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      throw new Error(payload?.error ?? 'Не удалось сохранить частоту обновления')
-    }
-    const settings: NavParserSettings = await response.json()
-    applyNavParserSettings(settings)
-    navSettingsMessage.value = 'Частота обновления сохранена'
-  } catch (error) {
-    navSettingsError.value = error instanceof Error ? error.message : 'Не удалось сохранить частоту обновления'
-  } finally {
-    isNavSettingsSaving.value = false
-  }
-}
-
-function navParserNextRunLabel() {
-  return navParserNextRunAt.value
-    ? `Следующий запуск: ${formatOrderDateTime(navParserNextRunAt.value)}`
-    : 'Следующий запуск — после первого успешного запуска'
-}
-
-function applyNavParserSettings(settings: NavParserSettings) {
-  navParserIntervalDays.value = settings.updateIntervalDays ?? 1
-  navParserWorkerCount.value = settings.workerCount ?? 4
-  navParserRequestTimeout.value = settings.requestTimeoutSeconds ?? 35
-  navParserRetryAttempts.value = settings.retryAttempts ?? 3
-  navParserRetryDelay.value = settings.retryDelaySeconds ?? 2
-  navParserFallbackSearch.value = settings.fallbackSearch ?? true
-  navParserNextRunAt.value = settings.nextRunAt ?? null
 }
 
 function currentSettingsSystemCatalogRows() {
@@ -1912,12 +1543,16 @@ async function saveSystemCatalogRow(row: SystemCatalogRow) {
     systemClass: row.systemClass,
     curator: row.curator,
   }
+  systemCatalogEditControllers.get(row.id)?.abort()
+  const controller = new AbortController()
+  systemCatalogEditControllers.set(row.id, controller)
   try {
     const query = new URLSearchParams({ orderId: String(row.orderId) })
-    const response = await fetch(`${API_BASE_URL}/system-catalog/${row.id}?${query.toString()}`, {
+    const response = await apiFetch(`/system-catalog/${row.id}?${query.toString()}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(submitted),
+      signal: controller.signal,
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
@@ -1929,7 +1564,12 @@ async function saveSystemCatalogRow(row: SystemCatalogRow) {
     }
     systemCatalogError.value = ''
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось сохранить строку таблицы 2'
+  } finally {
+    if (systemCatalogEditControllers.get(row.id) === controller) {
+      systemCatalogEditControllers.delete(row.id)
+    }
   }
 }
 
@@ -1981,8 +1621,15 @@ async function changeSystemDocumentPage(nextPage: number) {
   table?.querySelector<HTMLElement>('tbody tr')?.focus({ preventScroll: true })
 }
 
-function setPage(page: string) {
+function setPage(page: string, updateLocation = true) {
+  if (!pageKeys.has(page)) return
   activePage.value = page
+  if (updateLocation) {
+    const nextHash = `#/${page}`
+    if (window.location.hash !== nextHash) {
+      window.location.hash = nextHash
+    }
+  }
   openedSelect.value = null
   if (page === 'changes') {
     void loadClassificationChanges()
@@ -1992,6 +1639,13 @@ function setPage(page: string) {
     void loadClassificationCatalog()
   } else if (page === 'settings') {
     void Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadDocumentTable(), loadNavParserSettings(), loadNavParserProgress(), loadNavParserRuns()])
+  }
+}
+
+function syncPageFromLocation() {
+  const page = pageFromLocation()
+  if (page !== activePage.value) {
+    setPage(page, false)
   }
 }
 
@@ -2031,7 +1685,7 @@ function hideBrokenSystemTypeImage(event: Event) {
 
 function systemTypeImageSource(type: SystemTypeOption) {
   return type.imageUrl && type.slug
-    ? `${API_BASE_URL}/nav-system-types/${encodeURIComponent(type.slug)}/image`
+    ? apiURL(`/nav-system-types/${encodeURIComponent(type.slug)}/image`)
     : ''
 }
 
@@ -2123,6 +1777,41 @@ function collapseClassificationFilters() {
   openedClassificationFilter.value = null
 }
 
+function prepareClassificationFilterEnter(element: Element) {
+  const shell = element as HTMLElement
+  shell.style.height = '0px'
+  shell.style.opacity = '0'
+}
+
+function animateClassificationFilterEnter(element: Element) {
+  const shell = element as HTMLElement
+  window.requestAnimationFrame(() => {
+    shell.style.height = `${shell.scrollHeight}px`
+    shell.style.opacity = '1'
+  })
+}
+
+function finishClassificationFilterMotion(element: Element) {
+  const shell = element as HTMLElement
+  shell.style.height = ''
+  shell.style.opacity = ''
+}
+
+function prepareClassificationFilterLeave(element: Element) {
+  const shell = element as HTMLElement
+  shell.style.height = `${shell.scrollHeight}px`
+  shell.style.opacity = '1'
+}
+
+function animateClassificationFilterLeave(element: Element) {
+  const shell = element as HTMLElement
+  void shell.offsetHeight
+  window.requestAnimationFrame(() => {
+    shell.style.height = '0px'
+    shell.style.opacity = '0'
+  })
+}
+
 function classificationRowPositions() {
   return [...document.querySelectorAll<HTMLElement>('.classification-card-row')].map((element) => ({
     element,
@@ -2141,6 +1830,10 @@ function applySystemDocumentPayload(payload: SystemDocumentResponse) {
 }
 
 async function loadSystemDocuments(silent = false) {
+  systemDocumentRequestController?.abort()
+  const controller = new AbortController()
+  const tracksFilterRequest = silent
+  systemDocumentRequestController = controller
   if (!silent) {
     isSystemDocumentLoading.value = true
   } else {
@@ -2149,17 +1842,21 @@ async function loadSystemDocuments(silent = false) {
   systemCatalogError.value = ''
   try {
     const query = buildSystemCatalogQuery()
-    const response = await fetch(`${API_BASE_URL}/system-documents?${query.toString()}`)
+    const response = await apiFetch(`/system-documents?${query.toString()}`, { signal: controller.signal })
     if (!response.ok) {
       throw new Error('Не удалось загрузить список систем')
     }
     applySystemDocumentPayload(await response.json())
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     systemCatalogError.value = error instanceof Error ? error.message : 'Не удалось загрузить список систем'
   } finally {
-    if (!silent) {
+    const isLatestRequest = systemDocumentRequestController === controller
+    if (isLatestRequest) {
+      systemDocumentRequestController = null
       isSystemDocumentLoading.value = false
-    } else {
+    }
+    if (tracksFilterRequest) {
       systemFilterRequestCount.value = Math.max(0, systemFilterRequestCount.value - 1)
     }
   }
@@ -2181,6 +1878,9 @@ function scheduleSystemDocumentSearch() {
 function scheduleClassificationCatalogSearch() {
   if (classificationSearchTimer) {
     window.clearTimeout(classificationSearchTimer)
+  }
+  if (classificationFilterFeedbackTimer) {
+    window.clearTimeout(classificationFilterFeedbackTimer)
   }
   isClassificationSearchPending.value = true
   classificationSearchTimer = window.setTimeout(() => {
@@ -2226,6 +1926,9 @@ async function changeClassificationCatalogPage(nextPage: number) {
 }
 
 async function loadDocumentTable() {
+  documentTableRequestController?.abort()
+  const controller = new AbortController()
+  documentTableRequestController = controller
   isDocumentTableLoading.value = true
   documentError.value = ''
   try {
@@ -2233,16 +1936,20 @@ async function loadDocumentTable() {
     if (selectedOrderId.value) {
       query.set('orderId', String(selectedOrderId.value))
     }
-    const response = await fetch(`${API_BASE_URL}/system-documents?${query.toString()}`)
+    const response = await apiFetch(`/system-documents?${query.toString()}`, { signal: controller.signal })
     if (!response.ok) {
       throw new Error('Не удалось загрузить таблицу 3')
     }
     const payload: SystemDocumentResponse = await response.json()
     documentRows.value = payload.rows
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     documentError.value = error instanceof Error ? error.message : 'Не удалось загрузить таблицу 3'
   } finally {
-    isDocumentTableLoading.value = false
+    if (documentTableRequestController === controller) {
+      documentTableRequestController = null
+      isDocumentTableLoading.value = false
+    }
   }
 }
 
@@ -2309,12 +2016,16 @@ async function saveDocumentComment(row: SystemDocumentRow) {
   if (!selectedOrderId.value) {
     return
   }
+  documentCommentControllers.get(row.id)?.abort()
+  const controller = new AbortController()
+  documentCommentControllers.set(row.id, controller)
   try {
     const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
-    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}?${query.toString()}`, {
+    const response = await apiFetch(`/system-documents/${row.id}?${query.toString()}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ comment: row.comment }),
+      signal: controller.signal,
     })
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
@@ -2328,13 +2039,18 @@ async function saveDocumentComment(row: SystemDocumentRow) {
     }
     documentError.value = ''
   } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
     documentError.value = error instanceof Error ? error.message : 'Не удалось сохранить комментарий'
+  } finally {
+    if (documentCommentControllers.get(row.id) === controller) {
+      documentCommentControllers.delete(row.id)
+    }
   }
 }
 
 function systemDocumentAttachmentUrl(row: SystemDocumentRow) {
   const query = new URLSearchParams({ orderId: String(row.orderId) })
-  return `${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`
+  return apiURL(`/system-documents/${row.id}/attachment?${query.toString()}`)
 }
 
 function openAttachmentPicker(row: SystemDocumentRow) {
@@ -2365,7 +2081,7 @@ async function uploadSystemDocumentAttachment(row: SystemDocumentRow, event: Eve
     const query = new URLSearchParams({ orderId: String(row.orderId) })
     const form = new FormData()
     form.append('file', file)
-    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`, {
+    const response = await apiFetch(`/system-documents/${row.id}/attachment?${query.toString()}`, {
       method: 'POST',
       body: form,
     })
@@ -2392,7 +2108,7 @@ async function deleteSystemDocumentAttachment(row: SystemDocumentRow) {
   documentError.value = ''
   try {
     const query = new URLSearchParams({ orderId: String(row.orderId) })
-    const response = await fetch(`${API_BASE_URL}/system-documents/${row.id}/attachment?${query.toString()}`, {
+    const response = await apiFetch(`/system-documents/${row.id}/attachment?${query.toString()}`, {
       method: 'DELETE',
     })
     if (!response.ok) {
@@ -2418,7 +2134,7 @@ async function toggleSystemComparison(row: SystemDocumentRow, event: Event) {
   systemCatalogError.value = ''
   try {
     const query = new URLSearchParams({ orderId: String(row.orderId) })
-    const response = await fetch(`${API_BASE_URL}/system-documents/comparison?${query.toString()}`, {
+    const response = await apiFetch(`/system-documents/comparison?${query.toString()}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2456,7 +2172,7 @@ async function toggleAllSystemComparisons(event: Event) {
   systemCatalogError.value = ''
   try {
     const query = new URLSearchParams({ orderId: String(selectedOrderId.value) })
-    const response = await fetch(`${API_BASE_URL}/system-documents/comparison?${query.toString()}`, {
+    const response = await apiFetch(`/system-documents/comparison?${query.toString()}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2557,7 +2273,7 @@ async function openSystemHistory(system: SystemDocumentRow) {
   systemHistoryRows.value = []
   try {
     const query = new URLSearchParams({ code: system.code, systemName: system.systemName })
-    const response = await fetch(`${API_BASE_URL}/system-documents/history?${query.toString()}`)
+    const response = await apiFetch(`/system-documents/history?${query.toString()}`)
     if (!response.ok) {
       throw new Error('Не удалось загрузить историю системы')
     }
@@ -2652,6 +2368,325 @@ function pageTitle() {
   return navItems.find((item) => item.key === activePage.value)?.label ?? ''
 }
 
+const settingsPageModel: SettingsPageViewModel = {
+  attachmentFileIcon,
+  attachmentPendingIds,
+  cancelNavParser,
+  changeOrdersPage,
+  changeOrdersPageSize,
+  changeSettingsClassificationPage,
+  changeSettingsClassificationPageSize,
+  changeSettingsDocumentsPage,
+  changeSettingsDocumentsPageSize,
+  changeSettingsSystemCatalogPage,
+  changeSettingsSystemCatalogPageSize,
+  classModifier,
+  classOptions,
+  classificationError,
+  classificationLoadingMessage,
+  createOrder,
+  currentSettingsClassificationRows,
+  currentSettingsSystemCatalogRows,
+  deleteOrder,
+  deleteSystemDocumentAttachment,
+  documentError,
+  documentSearch,
+  filteredDocumentRows,
+  fontSizePreset,
+  fontSizePresets,
+  formatFileSize,
+  formatNavParserLogTime,
+  formatNavParserRunDate,
+  formatNavParserRunDuration,
+  formatOrderDateTime,
+  importOrderWorkbook,
+  importSystemCatalogFile,
+  importTableFile,
+  isClassificationLoading,
+  isDocumentTableLoading,
+  isNavParserCancelling,
+  isNavParserHistoryOpen,
+  isNavParserLogOpen,
+  isNavParserSettingsOpen,
+  isNavParsing,
+  isNavSettingsSaving,
+  isOrderWorkbookImporting,
+  isOrdersLoading,
+  isSettingsClassificationUnlocked,
+  isSettingsSystemCatalogUnlocked,
+  isSystemCatalogLoading,
+  navParseError,
+  navParseFailedSystems,
+  navParseMessage,
+  navParseNotFound,
+  navParserFallbackSearch,
+  navParserIntervalDays,
+  navParserLogsNewestFirst,
+  navParserNextRunLabel,
+  navParserProgress,
+  navParserRequestTimeout,
+  navParserRetryAttempts,
+  navParserRetryDelay,
+  navParserRunLogsNewestFirst,
+  navParserRuns,
+  navParserSourceLabel,
+  navParserWorkerCount,
+  navSettingsError,
+  navSettingsMessage,
+  openAttachmentPicker,
+  openOrderWorkbookImport,
+  openSystemCatalogImport,
+  openTableImport,
+  openedNavParserRunId,
+  openedSelect,
+  orders,
+  ordersError,
+  ordersPage,
+  ordersPageCount,
+  ordersPageSize,
+  ordersRangeEnd,
+  ordersRangeStart,
+  runNavParser,
+  saveClassificationRow,
+  saveDocumentComment,
+  saveNavParserSettings,
+  saveOrderName,
+  saveSystemCatalogRow,
+  scheduleClassificationRowSave,
+  scheduleDocumentCommentSave,
+  scheduleOrderRename,
+  scheduleSystemCatalogRowSave,
+  selectOrder,
+  selectedOrderId,
+  selectedOrderName,
+  settingsClassificationPage,
+  settingsClassificationPageCount,
+  settingsClassificationPageSize,
+  settingsClassificationRangeEnd,
+  settingsClassificationRangeStart,
+  settingsDocumentsPage,
+  settingsDocumentsPageCount,
+  settingsDocumentsPageSize,
+  settingsDocumentsRangeEnd,
+  settingsDocumentsRangeStart,
+  settingsOrderMenuId,
+  settingsSystemCatalogPage,
+  settingsSystemCatalogPageCount,
+  settingsSystemCatalogPageSize,
+  settingsSystemCatalogRangeEnd,
+  settingsSystemCatalogRangeStart,
+  systemCatalogError,
+  systemCatalogSearch,
+  systemDocumentAttachmentUrl,
+  tableSearch,
+  toggleSelect,
+  uploadSystemDocumentAttachment,
+  visibleDocumentRows,
+  visibleOrders,
+  visibleSettingsClassificationRows,
+  visibleSettingsSystemCatalogRows,
+}
+
+const comparisonPageModel: ComparisonPageViewModel = {
+  MAX_COMPARISON_ORDERS,
+  addComparisonOrder,
+  availableComparisonOrders,
+  changeComparisonPage,
+  changeComparisonPageSize,
+  classModifier,
+  comparisonDropIndex,
+  comparisonError,
+  comparisonOnlyDifferences,
+  comparisonOrderIds,
+  comparisonOrderName,
+  comparisonOrderOptions,
+  comparisonPage,
+  comparisonPageCount,
+  comparisonPageSize,
+  comparisonRangeEnd,
+  comparisonRangeStart,
+  comparisonRowHasDifference,
+  comparisonRows,
+  comparisonSort,
+  comparisonSortLabel,
+  comparisonValue,
+  draggedComparisonOrderId,
+  dropComparisonOrder,
+  endComparisonOrderDrag,
+  enterComparisonOrderDrop,
+  exportComparisonTable,
+  hideComparisonRow,
+  isComparisonLoading,
+  openedSelect,
+  removeComparisonOrder,
+  selectComparisonDifferenceFilter,
+  selectComparisonOrder,
+  selectComparisonSort,
+  startComparisonOrderDrag,
+  toggleSelect,
+  visibleComparisonRows,
+}
+
+const classificationPageModel: ClassificationPageViewModel = {
+  activeClassificationPageFilterCount,
+  animateClassificationFilterEnter,
+  animateClassificationFilterLeave,
+  changeClassificationCatalogPage,
+  changeClassificationCatalogPageSize,
+  classModifier,
+  classificationBaseSystems,
+  classificationCatalogConstructionTypes,
+  classificationCatalogError,
+  classificationCatalogPage,
+  classificationCatalogPageCount,
+  classificationCatalogPageSize,
+  classificationCatalogRangeEnd,
+  classificationCatalogRangeStart,
+  classificationCatalogSearchInput,
+  classificationEmptyMessage,
+  classificationFilterAvailableCount,
+  classificationFilterGroups,
+  classificationFilterOptionCount,
+  classificationFilterOptions,
+  classificationFilterSearch,
+  classificationSystemRows,
+  classificationSystems,
+  classificationView,
+  clearClassificationFilters,
+  collapseClassificationFilters,
+  finishClassificationFilterMotion,
+  hasActiveClassificationPageFilters,
+  hideBrokenSystemTypeImage,
+  isClassificationCatalogLoading,
+  isClassificationSearchPending,
+  isSystemTypesOpen,
+  openedClassificationFilter,
+  openedClassificationSystem,
+  openedClassificationSystemId,
+  openedSelect,
+  orders,
+  prepareClassificationFilterEnter,
+  prepareClassificationFilterLeave,
+  resetClassificationPageFilters,
+  scheduleClassificationCatalogSearch,
+  selectClassificationFilter,
+  selectConstructionType,
+  selectOrder,
+  selectSystemType,
+  selectedClassificationFilterCount,
+  selectedClassificationFilters,
+  selectedConstructionType,
+  selectedOrderId,
+  selectedOrderName,
+  selectedSystemType,
+  setPage,
+  systemTypeImageSource,
+  toggleClassificationFilter,
+  toggleClassificationSystem,
+  toggleSelect,
+  visibleClassificationFilterGroups,
+  visibleSystemTypes,
+}
+
+const systemsPageModel: SystemsPageViewModel = {
+  activeSystemFilterCount,
+  allVisibleSystemsSelected,
+  changeSystemDocumentPage,
+  changeSystemDocumentPageSize,
+  classModifier,
+  comparisonPendingIds,
+  currentSystemDocumentRows,
+  exportSystemCatalog,
+  filterSystemsByClass,
+  hasActiveSystemFilters,
+  hideBrokenSystemTypeImage,
+  isBulkComparisonUpdating,
+  isSystemDocumentLoading,
+  isSystemFiltering,
+  isSystemTypesOpen,
+  isSystemsRefreshDone,
+  isSystemsRefreshing,
+  loadSystemDocuments,
+  openSystemHistory,
+  openedSelect,
+  orders,
+  refreshSystemsPage,
+  resetSystemFilters,
+  scheduleSystemDocumentSearch,
+  selectConstructionType,
+  selectOrder,
+  selectSystemType,
+  selectedConstructionType,
+  selectedOrderId,
+  selectedOrderName,
+  selectedSystemCatalogClass,
+  selectedSystemCatalogCurator,
+  selectedSystemType,
+  someVisibleSystemsSelected,
+  statusAccentColor,
+  systemCatalogClassOptions,
+  systemCatalogCuratorOptions,
+  systemCatalogError,
+  systemCatalogSearch,
+  systemCatalogStats,
+  systemDocumentPage,
+  systemDocumentPageCount,
+  systemDocumentPageSize,
+  systemDocumentRangeEnd,
+  systemDocumentRangeStart,
+  systemTypeImageSource,
+  systemsConstructionTypes,
+  toggleAllSystemComparisons,
+  toggleSelect,
+  toggleSystemComparison,
+  visibleSystemDocumentRows,
+  visibleSystemTypes,
+}
+
+const changesPageModel: ChangesPageViewModel = {
+  activeChangeFilterCount,
+  afterFilterAccentModifier,
+  afterOptions,
+  beforeOptions,
+  changeClassificationPage,
+  changeClassificationPageSize,
+  classModifier,
+  classificationChangesEmptyMessage,
+  classificationConstructionTypes,
+  classificationError,
+  classificationLoadingMessage,
+  classificationPage,
+  classificationPageCount,
+  classificationPageSize,
+  classificationRangeEnd,
+  classificationRangeStart,
+  classificationStats,
+  currentClassificationRows,
+  exportClassificationTable,
+  filterChangesByClass,
+  hasActiveChangeFilters,
+  isChangesRefreshDone,
+  isChangesRefreshing,
+  isClassificationFiltering,
+  isClassificationLoading,
+  openedSelect,
+  orders,
+  refreshChangesPage,
+  resetChangesFilters,
+  selectAfterChangeFilter,
+  selectBeforeChangeFilter,
+  selectConstructionType,
+  selectOrder,
+  selectedAfterFilter,
+  selectedBeforeFilter,
+  selectedConstructionType,
+  selectedOrderId,
+  selectedOrderName,
+  statusAccentColor,
+  toggleSelect,
+  visibleClassificationRows,
+}
+
 function updateScrollTopVisibility() {
   isScrollTopVisible.value = window.scrollY > 500
 }
@@ -2668,6 +2703,7 @@ onMounted(async () => {
   updateScrollTopVisibility()
   window.addEventListener('resize', updateClassificationCardColumns)
   window.addEventListener('scroll', updateScrollTopVisibility, { passive: true })
+  window.addEventListener('hashchange', syncPageFromLocation)
   await loadOrders()
   await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings(), loadNavParserProgress(), loadNavParserRuns()])
 })
@@ -2675,6 +2711,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateClassificationCardColumns)
   window.removeEventListener('scroll', updateScrollTopVisibility)
+  window.removeEventListener('hashchange', syncPageFromLocation)
   if (systemDocumentSearchTimer) {
     window.clearTimeout(systemDocumentSearchTimer)
   }
@@ -2682,2128 +2719,49 @@ onBeforeUnmount(() => {
     window.clearTimeout(classificationSearchTimer)
   }
   stopNavParserPolling()
+  classificationRequestController?.abort()
+  systemCatalogRequestController?.abort()
+  classificationCatalogRequestController?.abort()
+  systemDocumentRequestController?.abort()
+  documentTableRequestController?.abort()
   documentCommentTimers.forEach((timer) => window.clearTimeout(timer))
   classificationEditTimers.forEach((timer) => window.clearTimeout(timer))
   systemCatalogEditTimers.forEach((timer) => window.clearTimeout(timer))
   orderRenameTimers.forEach((timer) => window.clearTimeout(timer))
+  orderRenameControllers.forEach((controller) => controller.abort())
+  classificationEditControllers.forEach((controller) => controller.abort())
+  systemCatalogEditControllers.forEach((controller) => controller.abort())
+  documentCommentControllers.forEach((controller) => controller.abort())
 })
 </script>
 
 <template>
-  <div class="app" @click="openedSelect = null; settingsOrderMenuId = null; isClassificationLegendOpen = false">
-    <header class="site-header">
-      <div class="header-container">
-        <div class="main-header__inner">
-          <a class="brand-link" href="/" aria-label="Технониколь Светофор онлайн">
-            <img :src="logo" alt="Технониколь Светофор онлайн" />
-          </a>
-
-          <nav class="primary-nav" aria-label="Основная навигация">
-            <button
-              v-for="item in navItems"
-              :key="item.key"
-              class="primary-nav__item"
-              :class="{ 'is-active': activePage === item.key }"
-              type="button"
-              @click.stop="setPage(item.key)"
-            >
-              {{ item.label }}
-            </button>
-          </nav>
-
-          <div class="header-class-legend" @click.stop>
-            <button
-              class="header-class-legend__toggle"
-              :class="{ 'is-open': isClassificationLegendOpen }"
-              type="button"
-              aria-label="Показать легенду классов систем"
-              title="Легенда классов систем"
-              :aria-expanded="isClassificationLegendOpen"
-              aria-controls="global-class-legend"
-              @click="isClassificationLegendOpen = !isClassificationLegendOpen"
-            >
-              <Info :size="18" :stroke-width="2" aria-hidden="true" />
-            </button>
-            <Transition name="header-legend">
-              <div
-                v-if="isClassificationLegendOpen"
-                id="global-class-legend"
-                class="classification-class-legend header-class-legend__panel"
-              >
-                <article class="classification-class-legend__item classification-class-legend__item--recommended">
-                  <span class="classification-class-legend__marker" aria-hidden="true" />
-                  <p><strong>Рекомендованные</strong> — системы ТН, обладающие исключительными характеристиками, направленными на повышение безопасности, энергоэффективности и долговечности зданий и сооружений.</p>
-                </article>
-                <article class="classification-class-legend__item classification-class-legend__item--allowed">
-                  <span class="classification-class-legend__marker" aria-hidden="true" />
-                  <p><strong>Разрешённые</strong> — системы ТН, обладающие высокими характеристиками, направленными на повышение безопасности, энергоэффективности и долговечности зданий и сооружений, но имеющие более низкий приоритет по сравнению с рекомендованными системами.</p>
-                </article>
-                <article class="classification-class-legend__item classification-class-legend__item--forbidden">
-                  <span class="classification-class-legend__marker" aria-hidden="true" />
-                  <p><strong>Запрещённые</strong> — системы ТН, противоречащие нормам безопасности и внутренним нормам ТН и/или не имеющие необходимой разрешительной документации для применения в стране присутствия. К этой категории относятся решения, не соответствующие законодательству и/или нормативной документации по механической, пожарной, санитарно-эпидемиологической, экологической и другим видам безопасности.</p>
-                </article>
-              </div>
-            </Transition>
-          </div>
-        </div>
-      </div>
-    </header>
+  <div
+    class="app"
+    :style="{ '--app-min-font-size': `${minimumAppFontSize}px` }"
+    @click="openedSelect = null; settingsOrderMenuId = null; isClassificationLegendOpen = false"
+  >
+    <AppHeader
+      :active-page="activePage"
+      :items="navItems"
+      v-model:is-legend-open="isClassificationLegendOpen"
+      @navigate="setPage"
+    />
 
     <main class="page-main">
-      <section v-if="activePage === 'changes'" class="changes-page">
-        <section class="summary-grid" aria-label="Сводка изменений">
-          <article class="summary-card summary-card--changed">
-            <div class="summary-card__icon" aria-hidden="true">
-              <Repeat2 :size="34" :stroke-width="1.8" />
-            </div>
-            <div class="summary-card__content">
-              <span>Изменения в классификации</span>
-              <strong>{{ classificationStats.classificationChanges }}</strong>
-            </div>
-          </article>
-
-          <div class="status-stack changes-status-stack">
-            <button class="status-card status-card--recommended" :class="{ 'is-selected': selectedAfterFilter === 'Рекомендованная' }" type="button" @click="filterChangesByClass('Рекомендованная')">
-              <CircleCheck :size="25" :stroke-width="1.8" aria-hidden="true" />
-              <strong>{{ classificationStats.recommended }}</strong>
-              <span>Рекомендованных</span>
-              <ChevronRight class="status-card__chevron" :size="20" aria-hidden="true" />
-            </button>
-            <button class="status-card status-card--allowed" :class="{ 'is-selected': selectedAfterFilter === 'Разрешенная' }" type="button" @click="filterChangesByClass('Разрешенная')">
-              <TriangleAlert :size="25" :stroke-width="1.8" aria-hidden="true" />
-              <strong>{{ classificationStats.allowed }}</strong>
-              <span>Разрешенных</span>
-              <ChevronRight class="status-card__chevron" :size="20" aria-hidden="true" />
-            </button>
-          </div>
-
-          <article class="summary-card summary-card--added">
-            <div class="summary-card__icon" aria-hidden="true">
-              <Layers3 :size="34" :stroke-width="1.8" />
-            </div>
-            <div class="summary-card__content">
-              <span>Добавлено систем</span>
-              <strong>{{ classificationStats.addedSystems }}</strong>
-            </div>
-          </article>
-        </section>
-
-        <section
-          class="changes-filters"
-          :class="afterFilterAccentModifier() && `changes-filter-accent--${afterFilterAccentModifier()}`"
-          :style="{ '--before-accent': statusAccentColor(selectedBeforeFilter), '--after-accent': statusAccentColor(selectedAfterFilter) }"
-          aria-label="Фильтры изменений"
-        >
-          <header class="changes-filters__header">
-            <div class="changes-filters__heading">
-              <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
-              <div>
-                <h2>Фильтры</h2>
-              </div>
-            </div>
-            <div class="changes-filters__header-actions">
-              <div class="select-field">
-                <span>Распоряжения</span>
-                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                    <span>{{ selectedOrderName() }}</span>
-                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  </button>
-                  <Transition name="select-menu">
-                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                      <button
-                        v-for="order in orders"
-                        :key="order.id"
-                        class="custom-select__option"
-                        :class="{ 'is-selected': order.id === selectedOrderId }"
-                        type="button"
-                        @click="selectOrder(order)"
-                      >
-                        {{ order.name }}
-                      </button>
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-              <div class="changes-refresh-panel">
-                <button type="button" :class="{ 'is-success': isChangesRefreshDone }" :disabled="isChangesRefreshing" @click="refreshChangesPage">
-                  <CircleCheck v-if="isChangesRefreshDone" :size="18" :stroke-width="1.9" aria-hidden="true" />
-                  <RefreshCw v-else :class="{ 'is-spinning': isChangesRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  {{ isChangesRefreshing ? 'Обновление…' : isChangesRefreshDone ? 'Обновлено' : 'Обновить' }}
-                </button>
-              </div>
-            </div>
-          </header>
-
-          <div class="changes-filters__group changes-filters__construction">
-            <h3>Тип строительства</h3>
-            <div class="type-tabs type-tabs--changes">
-              <button
-                v-for="type in classificationConstructionTypes"
-                :key="type.name"
-                class="type-tab"
-                :class="{ 'type-tab--active': type.name === selectedConstructionType }"
-                type="button"
-                @click="selectConstructionType(type.name)"
-              >
-                <span>{{ type.label }}</span>
-                <strong>{{ type.count }}</strong>
-              </button>
-            </div>
-          </div>
-
-          <div class="changes-filters__group changes-filters__classes">
-            <h3>Класс системы</h3>
-            <div class="table-toolbar changes-filters__toolbar">
-              <div class="select-field">
-                <span>Было</span>
-                <div class="custom-select" :class="{ 'is-open': openedSelect === 'before', 'is-filtered': selectedBeforeFilter !== 'Все' }">
-                  <button class="custom-select__button" type="button" @click.stop="toggleSelect('before')">
-                    <span>{{ selectedBeforeFilter }}</span>
-                    <i aria-hidden="true" />
-                  </button>
-                  <Transition name="select-menu">
-                    <div v-if="openedSelect === 'before'" class="custom-select__menu">
-                      <button
-                        v-for="option in beforeOptions"
-                        :key="option"
-                        class="custom-select__option"
-                        :class="{ 'is-selected': option === selectedBeforeFilter }"
-                        type="button"
-                        @click="selectBeforeChangeFilter(option)"
-                      >
-                        {{ option }}
-                      </button>
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-              <div class="select-field">
-                <span>Стало</span>
-                <div class="custom-select" :class="{ 'is-open': openedSelect === 'after', 'is-filtered': selectedAfterFilter !== 'Все' }">
-                  <button class="custom-select__button" type="button" @click.stop="toggleSelect('after')">
-                    <span>{{ selectedAfterFilter }}</span>
-                    <i aria-hidden="true" />
-                  </button>
-                  <Transition name="select-menu">
-                    <div v-if="openedSelect === 'after'" class="custom-select__menu">
-                      <button
-                        v-for="option in afterOptions"
-                        :key="option"
-                        class="custom-select__option"
-                        :class="{ 'is-selected': option === selectedAfterFilter }"
-                        type="button"
-                        @click="selectAfterChangeFilter(option)"
-                      >
-                        {{ option }}
-                      </button>
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-              <Transition name="changes-reset">
-                <button
-                  v-if="hasActiveChangeFilters"
-                  class="changes-reset-filters"
-                  type="button"
-                  title="Сбросить фильтры"
-                  aria-label="Сбросить фильтры"
-                  @click="resetChangesFilters"
-                >
-                  <FunnelX :size="19" :stroke-width="1.8" aria-hidden="true" />
-                  <span class="systems-reset-filters__count" aria-hidden="true">{{ activeChangeFilterCount }}</span>
-                </button>
-              </Transition>
-              <button class="export-button" type="button" @click="exportClassificationTable">
-                Экспорт
-                <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
-              </button>
-            </div>
-          </div>
-        </section>
-
-        <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
-
-        <div
-          class="systems-table changes-table-card"
-          :class="[
-            afterFilterAccentModifier() && `changes-table-card--${afterFilterAccentModifier()}`,
-            { 'is-empty-loading': (isClassificationLoading || isClassificationFiltering) && currentClassificationRows().length === 0 },
-          ]"
-          :style="{ '--before-accent': statusAccentColor(selectedBeforeFilter), '--after-accent': statusAccentColor(selectedAfterFilter) }"
-        >
-          <header class="changes-table-card__header">
-            <div class="changes-table-card__heading">
-              <span class="changes-table-card__icon" aria-hidden="true">
-                <ArrowDownUp :size="18" :stroke-width="1.8" />
-              </span>
-              <div>
-                <strong>Системы и изменения классов</strong>
-                <span>Сравнение статусов по выбранному распоряжению</span>
-              </div>
-            </div>
-            <span class="changes-table-card__count">{{ currentClassificationRows().length }} систем</span>
-          </header>
-          <Transition name="table-filter-loading">
-            <div
-              v-if="isClassificationLoading || isClassificationFiltering"
-              class="systems-table__filter-loading"
-              :class="{ 'systems-table__filter-loading--initial': currentClassificationRows().length === 0 }"
-              role="status"
-              aria-live="polite"
-            >
-              <span>
-                <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
-                {{ isClassificationLoading ? classificationLoadingMessage : 'Применяем фильтры…' }}
-              </span>
-            </div>
-          </Transition>
-          <table>
-            <colgroup>
-              <col class="changes-table__name-column" />
-              <col />
-              <col />
-            </colgroup>
-            <thead>
-              <tr>
-                <th rowspan="2">Название системы</th>
-                <th colspan="2">Класс</th>
-              </tr>
-              <tr>
-                <th>было</th>
-                <th>стало</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="!isClassificationLoading && !isClassificationFiltering && currentClassificationRows().length === 0">
-                <td class="empty-table-cell" colspan="3">{{ classificationChangesEmptyMessage() }}</td>
-              </tr>
-              <tr v-for="row in visibleClassificationRows()" :key="row.id" tabindex="-1">
-                <td class="changes-system-cell">
-                  <div class="changes-system-title">
-                    <a v-if="row.systemUrl" class="changes-system-link" :href="row.systemUrl" target="_blank" rel="noreferrer">
-                      <span>{{ row.systemName }}</span>
-                      <ExternalLink :size="13" :stroke-width="1.8" aria-hidden="true" />
-                    </a>
-                    <span v-else class="changes-system-name">{{ row.systemName }}</span>
-                    <span
-                      v-if="row.constructionType === 'Тип не присвоен'"
-                      class="construction-type-info"
-                      tabindex="0"
-                      aria-label="Для данной системы параметр Тип строительства не был найден на nav.tn.ru"
-                    >
-                      <Info :size="13" :stroke-width="2.1" aria-hidden="true" />
-                      <span class="construction-type-info__tooltip" role="tooltip">Для данной системы параметр «Тип строительства» не был найден на nav.tn.ru</span>
-                    </span>
-                  </div>
-                </td>
-                <td :class="`changes-status-cell changes-status-cell--${classModifier(row.classBefore) || 'neutral'}`">
-                  <span :class="`changes-status changes-status--${classModifier(row.classBefore) || 'neutral'}`">
-                    <CircleCheck v-if="classModifier(row.classBefore) === 'recommended'" :size="15" aria-hidden="true" />
-                    <TriangleAlert v-else-if="classModifier(row.classBefore) === 'allowed'" :size="15" aria-hidden="true" />
-                    <X v-else-if="classModifier(row.classBefore) === 'forbidden'" :size="15" aria-hidden="true" />
-                    <Plus v-else :size="15" aria-hidden="true" />
-                    {{ row.classBefore }}
-                  </span>
-                </td>
-                <td :class="`changes-status-cell changes-status-cell--${classModifier(row.classAfter) || 'neutral'}`">
-                  <span :class="`changes-status changes-status--${classModifier(row.classAfter) || 'neutral'}`">
-                    <CircleCheck v-if="classModifier(row.classAfter) === 'recommended'" :size="15" aria-hidden="true" />
-                    <TriangleAlert v-else-if="classModifier(row.classAfter) === 'allowed'" :size="15" aria-hidden="true" />
-                    <X v-else-if="classModifier(row.classAfter) === 'forbidden'" :size="15" aria-hidden="true" />
-                    <Info v-else :size="15" aria-hidden="true" />
-                    {{ row.classAfter }}
-                  </span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <footer v-if="currentClassificationRows().length > 0" class="table-pagination changes-table-pagination">
-          <span class="table-pagination__range">
-            Показано {{ classificationRangeStart() }}–{{ classificationRangeEnd() }} из {{ currentClassificationRows().length }}
-          </span>
-          <div class="table-pagination__controls">
-            <label>
-              <span>Строк на странице</span>
-              <select v-model="classificationPageSize" @change="changeClassificationPageSize">
-                <option value="50">50</option>
-                <option value="100">100</option>
-                <option value="all">Все</option>
-              </select>
-            </label>
-            <div v-if="classificationPageSize !== 'all'" class="table-pagination__pages">
-              <button type="button" :disabled="classificationPage === 1" aria-label="Предыдущая страница" @click="changeClassificationPage(classificationPage - 1)">‹</button>
-              <strong>{{ classificationPage }} / {{ classificationPageCount() }}</strong>
-              <button type="button" :disabled="classificationPage >= classificationPageCount()" aria-label="Следующая страница" @click="changeClassificationPage(classificationPage + 1)">›</button>
-            </div>
-          </div>
-        </footer>
-      </section>
-
-      <section v-else-if="activePage === 'systems'" class="systems-page">
-        <section class="systems-summary" aria-label="Сводка систем">
-          <article class="systems-metric-card">
-            <span class="systems-metric-card__accent" aria-hidden="true" />
-            <span class="systems-metric-card__icon" aria-hidden="true">
-              <Layers3 :size="38" :stroke-width="1.7" />
-            </span>
-            <span class="systems-metric-card__value">
-              <strong>{{ systemCatalogStats.total }}</strong>
-              <small>систем</small>
-            </span>
-            <Layers3 class="systems-metric-card__watermark" :size="118" :stroke-width="1.2" aria-hidden="true" />
-          </article>
-
-          <div class="status-stack systems-status-stack">
-            <button class="status-card status-card--recommended" :class="{ 'is-selected': selectedSystemCatalogClass === 'Рекомендованная' }" type="button" @click="filterSystemsByClass('Рекомендованная')">
-              <strong>{{ systemCatalogStats.recommended }}</strong>
-              <span>Рекомендованных</span>
-              <ChevronRight :size="19" aria-hidden="true" />
-            </button>
-            <button class="status-card status-card--allowed" :class="{ 'is-selected': selectedSystemCatalogClass === 'Разрешенная' }" type="button" @click="filterSystemsByClass('Разрешенная')">
-              <strong>{{ systemCatalogStats.allowed }}</strong>
-              <span>Разрешенных</span>
-              <ChevronRight :size="19" aria-hidden="true" />
-            </button>
-            <button class="status-card status-card--forbidden" :class="{ 'is-selected': selectedSystemCatalogClass === 'Запрещенная' }" type="button" @click="filterSystemsByClass('Запрещенная')">
-              <strong>{{ systemCatalogStats.forbidden }}</strong>
-              <span>Запрещенных</span>
-              <ChevronRight :size="19" aria-hidden="true" />
-            </button>
-          </div>
-
-          <article class="systems-metric-card">
-            <span class="systems-metric-card__accent" aria-hidden="true" />
-            <span class="systems-metric-card__icon" aria-hidden="true">
-              <UsersRound :size="38" :stroke-width="1.7" />
-            </span>
-            <span class="systems-metric-card__value">
-              <strong>{{ systemCatalogStats.curators }}</strong>
-              <small>кураторов</small>
-            </span>
-            <UsersRound class="systems-metric-card__watermark" :size="118" :stroke-width="1.2" aria-hidden="true" />
-          </article>
-        </section>
-
-        <section class="changes-filters systems-filters" aria-label="Фильтры списка систем">
-          <header class="changes-filters__header">
-            <div class="changes-filters__heading">
-              <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
-              <div>
-                <h2>Фильтры</h2>
-              </div>
-            </div>
-            <div class="changes-filters__header-actions">
-              <div class="select-field">
-                <span>Распоряжение</span>
-                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                    <span>{{ selectedOrderName() }}</span>
-                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  </button>
-                  <Transition name="select-menu">
-                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                      <button
-                        v-for="order in orders"
-                        :key="order.id"
-                        class="custom-select__option"
-                        :class="{ 'is-selected': order.id === selectedOrderId }"
-                        type="button"
-                        @click="selectOrder(order)"
-                      >
-                        {{ order.name }}
-                      </button>
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-              <div class="changes-refresh-panel">
-                <button type="button" :class="{ 'is-success': isSystemsRefreshDone }" :disabled="isSystemsRefreshing" @click="refreshSystemsPage">
-                  <CircleCheck v-if="isSystemsRefreshDone" :size="18" :stroke-width="1.9" aria-hidden="true" />
-                  <RefreshCw v-else :class="{ 'is-spinning': isSystemsRefreshing }" :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  {{ isSystemsRefreshing ? 'Обновление…' : isSystemsRefreshDone ? 'Обновлено' : 'Обновить' }}
-                </button>
-              </div>
-            </div>
-          </header>
-
-          <div class="changes-filters__group systems-filters__construction">
-            <h3>Тип строительства</h3>
-            <div class="type-tabs type-tabs--changes type-tabs--systems">
-              <button
-                v-for="type in systemsConstructionTypes"
-                :key="type.name"
-                class="type-tab"
-                :class="{ 'type-tab--active': type.name === selectedConstructionType }"
-                type="button"
-                @click="selectConstructionType(type.name)"
-              >
-                <span>{{ type.name }}</span>
-                <strong>{{ type.count }}</strong>
-              </button>
-            </div>
-          </div>
-
-          <div class="changes-filters__group systems-filters__types">
-            <section class="system-type-panel" :class="{ 'is-open': isSystemTypesOpen }" aria-label="Тип системы">
-              <button
-                class="system-type-toggle"
-                type="button"
-                :aria-expanded="isSystemTypesOpen"
-                @click="isSystemTypesOpen = !isSystemTypesOpen"
-              >
-                <span class="system-type-toggle__title">Тип системы</span>
-                <span class="system-type-toggle__selected">Выбрано: {{ selectedSystemType.name }}</span>
-                <i aria-hidden="true" />
-              </button>
-
-              <Transition name="system-type-body">
-                <div v-if="isSystemTypesOpen" class="system-type-body">
-                  <div class="system-type-grid">
-                    <button
-                      v-for="type in visibleSystemTypes"
-                      :key="type.name"
-                      class="system-type-card"
-                      :class="{ 'is-active': type.name === selectedSystemType.name }"
-                      type="button"
-                      @click="selectSystemType(type)"
-                    >
-                      <span class="system-type-card__image" aria-hidden="true">
-                        <Layers3 :size="25" :stroke-width="1.6" />
-                        <img v-if="type.imageUrl" :src="systemTypeImageSource(type)" alt="" loading="lazy" decoding="async" @error="hideBrokenSystemTypeImage" />
-                      </span>
-                      <span class="system-type-card__content">
-                        <strong>{{ type.name }}</strong>
-                        <span>{{ type.count }} систем</span>
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              </Transition>
-            </section>
-          </div>
-
-          <div class="changes-filters__group systems-filters__parameters">
-            <section class="table-toolbar systems-table-toolbar" aria-label="Параметры системы">
-          <label class="search-field systems-name-search" :class="{ 'is-filtered': systemCatalogSearch.trim() }">
-            <span>Поиск системы</span>
-            <span class="systems-search-control">
-              <Search :size="18" :stroke-width="1.8" aria-hidden="true" />
-              <input v-model="systemCatalogSearch" type="search" placeholder="Введите название системы" @input="scheduleSystemDocumentSearch" />
-            </span>
-          </label>
-
-          <div class="select-field systems-class-filter" :style="{ '--class-accent': statusAccentColor(selectedSystemCatalogClass) }">
-            <span>Класс</span>
-            <div class="custom-select" :class="{ 'is-open': openedSelect === 'class', 'is-filtered': selectedSystemCatalogClass !== 'Все' }">
-              <button class="custom-select__button" type="button" @click.stop="toggleSelect('class')">
-                <span>{{ selectedSystemCatalogClass }}</span>
-                <i aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'class'" class="custom-select__menu">
-                  <button
-                    v-for="option in systemCatalogClassOptions"
-                    :key="option"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': option === selectedSystemCatalogClass }"
-                    type="button"
-                    @click="selectedSystemCatalogClass = option; openedSelect = null; loadSystemDocuments(true)"
-                  >
-                    {{ option }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <div class="select-field">
-            <span>Куратор</span>
-            <div class="custom-select" :class="{ 'is-open': openedSelect === 'curator', 'is-filtered': selectedSystemCatalogCurator !== 'Все кураторы' }">
-              <button class="custom-select__button" type="button" @click.stop="toggleSelect('curator')">
-                <span>{{ selectedSystemCatalogCurator }}</span>
-                <i aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'curator'" class="custom-select__menu">
-                  <button
-                    v-for="option in systemCatalogCuratorOptions"
-                    :key="option"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': option === selectedSystemCatalogCurator }"
-                    type="button"
-                    @click="selectedSystemCatalogCurator = option; openedSelect = null; loadSystemDocuments(true)"
-                  >
-                    {{ option }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <span class="systems-reset-slot">
-            <Transition name="changes-reset">
-              <button
-                v-if="hasActiveSystemFilters"
-                class="changes-reset-filters systems-reset-filters"
-                type="button"
-                title="Сбросить фильтры"
-                aria-label="Сбросить фильтры"
-                @click="resetSystemFilters"
-              >
-                <FunnelX :size="19" :stroke-width="1.8" aria-hidden="true" />
-                <span class="systems-reset-filters__count" aria-hidden="true">{{ activeSystemFilterCount }}</span>
-              </button>
-            </Transition>
-          </span>
-
-              <button class="export-button" type="button" @click="exportSystemCatalog">
-                Экспорт
-                <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
-              </button>
-            </section>
-          </div>
-        </section>
-
-        <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
-
-        <section class="comparison-table-controls" aria-label="Управление выбором для сравнения">
-          <div class="comparison-table-controls__heading-wrap">
-            <span class="comparison-table-controls__icon" aria-hidden="true">
-              <Scale :size="24" :stroke-width="1.8" />
-            </span>
-            <div class="comparison-table-controls__heading">
-              <strong>Добавление в сравнение</strong>
-              <span
-                class="comparison-table-controls__help"
-                tabindex="0"
-                aria-label="Отметьте нужные системы в таблице для сравнения изменений класса системы в зависимости от версии распоряжения"
-              >
-                <Info :size="15" :stroke-width="2" aria-hidden="true" />
-                <span role="tooltip">Отметьте нужные системы в таблице для сравнения изменений класса системы в зависимости от версии распоряжения.</span>
-              </span>
-            </div>
-          </div>
-          <div class="comparison-table-controls__actions">
-            <label class="toolbar-checkbox" :class="{ 'is-partial': someVisibleSystemsSelected }">
-              <input
-                type="checkbox"
-                :checked="allVisibleSystemsSelected"
-                :disabled="isBulkComparisonUpdating || currentSystemDocumentRows().length === 0"
-                @change="toggleAllSystemComparisons"
-              />
-              <span aria-hidden="true" />
-              <strong>Выбрать все</strong>
-            </label>
-          </div>
-
-        </section>
-
-        <div
-          class="systems-table systems-table--catalog"
-          :class="{ 'is-empty-loading': (isSystemDocumentLoading || isSystemFiltering) && currentSystemDocumentRows().length === 0 }"
-        >
-          <Transition name="table-filter-loading">
-            <div
-              v-if="isSystemDocumentLoading || isSystemFiltering"
-              class="systems-table__filter-loading"
-              :class="{ 'systems-table__filter-loading--initial': currentSystemDocumentRows().length === 0 }"
-              role="status"
-              aria-live="polite"
-            >
-              <span>
-                <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
-                {{ isSystemDocumentLoading ? 'Загружаем список систем…' : 'Применяем фильтры…' }}
-              </span>
-            </div>
-          </Transition>
-          <table>
-            <thead>
-              <tr>
-                <th>Шифр</th>
-                <th>Название системы</th>
-                <th>Класс</th>
-                <th>Куратор</th>
-                <th>Сравнение</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="!isSystemDocumentLoading && !isSystemFiltering && currentSystemDocumentRows().length === 0">
-                <td class="empty-table-cell" colspan="5">В таблице 3 этого распоряжения пока нет систем</td>
-              </tr>
-              <tr v-for="row in visibleSystemDocumentRows()" :key="row.id" tabindex="-1">
-                <td class="systems-code-cell">
-                  <span :class="{ 'systems-code-cell__empty': !row.code.trim() }">{{ row.code.trim() || 'Не присвоен' }}</span>
-                </td>
-                <td class="systems-name-cell">
-                  <a v-if="row.systemUrl" :href="row.systemUrl" target="_blank" rel="noreferrer">
-                    {{ row.systemName }}
-                  </a>
-                  <span v-else>{{ row.systemName }}</span>
-                </td>
-                <td :class="`status-cell systems-catalog-status-cell systems-catalog-status-cell--${classModifier(row.systemClass)}`">
-                  <span :class="`systems-class-badge systems-class-badge--${classModifier(row.systemClass)}`">
-                    <i aria-hidden="true" />
-                    {{ row.systemClass }}
-                  </span>
-                  <button class="status-cell__icon systems-history-icon" type="button" :aria-label="`История ${row.systemName}`" @click.stop="openSystemHistory(row)">
-                    <Folder :size="19" :stroke-width="2" aria-hidden="true" />
-                  </button>
-                </td>
-                <td class="systems-curator-cell">{{ row.curator }}</td>
-                <td>
-                  <label class="compare-checkbox" :class="{ 'is-pending': comparisonPendingIds.includes(row.id) }">
-                    <input
-                      type="checkbox"
-                      :checked="row.comparisonSelected"
-                      :disabled="comparisonPendingIds.includes(row.id)"
-                      :aria-label="`Добавить ${row.systemName} в сравнение`"
-                      @change="toggleSystemComparison(row, $event)"
-                    />
-                    <span class="compare-mark" :class="{ 'is-checked': row.comparisonSelected }" aria-hidden="true">
-                      {{ row.comparisonSelected ? '✓' : '' }}
-                    </span>
-                  </label>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <footer v-if="currentSystemDocumentRows().length > 0" class="table-pagination">
-          <span class="table-pagination__range">
-            Показано {{ systemDocumentRangeStart() }}–{{ systemDocumentRangeEnd() }} из {{ currentSystemDocumentRows().length }}
-          </span>
-          <div class="table-pagination__controls">
-            <label>
-              <span>Строк на странице</span>
-              <select v-model="systemDocumentPageSize" @change="changeSystemDocumentPageSize">
-                <option value="50">50</option>
-                <option value="100">100</option>
-                <option value="all">Все</option>
-              </select>
-            </label>
-            <div v-if="systemDocumentPageSize !== 'all'" class="table-pagination__pages">
-              <button type="button" :disabled="systemDocumentPage === 1" aria-label="Предыдущая страница" @click="changeSystemDocumentPage(systemDocumentPage - 1)">‹</button>
-              <strong>{{ systemDocumentPage }} / {{ systemDocumentPageCount() }}</strong>
-              <button type="button" :disabled="systemDocumentPage >= systemDocumentPageCount()" aria-label="Следующая страница" @click="changeSystemDocumentPage(systemDocumentPage + 1)">›</button>
-            </div>
-          </div>
-        </footer>
-
-      </section>
-
-      <section v-else-if="activePage === 'classification'" class="classification-page">
-        <section class="changes-filters classification-page-filters" aria-label="Основные параметры классификации">
-          <header class="changes-filters__header">
-            <div class="changes-filters__heading">
-              <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
-              <div>
-                <h2>Основные параметры</h2>
-              </div>
-            </div>
-            <div class="changes-filters__header-actions">
-              <div class="select-field">
-                <span>Распоряжение</span>
-                <div class="custom-select changes-order-select" :class="{ 'is-open': openedSelect === 'order' }">
-                  <button class="custom-select__button changes-order-select__button" type="button" @click.stop="toggleSelect('order')">
-                    <CalendarDays :size="18" :stroke-width="1.8" aria-hidden="true" />
-                    <span>{{ selectedOrderName() }}</span>
-                    <ChevronDown class="changes-order-select__chevron" :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  </button>
-                  <Transition name="select-menu">
-                    <div v-if="openedSelect === 'order'" class="custom-select__menu">
-                      <button
-                        v-for="order in orders"
-                        :key="order.id"
-                        class="custom-select__option"
-                        :class="{ 'is-selected': order.id === selectedOrderId }"
-                        type="button"
-                        @click="selectOrder(order)"
-                      >
-                        {{ order.name }}
-                      </button>
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <div class="changes-filters__group">
-            <h3>Тип строительства</h3>
-            <div class="type-tabs type-tabs--changes type-tabs--systems">
-              <button
-                v-for="type in classificationCatalogConstructionTypes"
-                :key="type.name"
-                class="type-tab"
-                :class="{ 'type-tab--active': type.name === selectedConstructionType }"
-                type="button"
-                @click="selectConstructionType(type.name)"
-              >
-                <span>{{ type.name }}</span>
-                <strong>{{ type.count }}</strong>
-              </button>
-            </div>
-          </div>
-
-          <div class="changes-filters__group classification-page-filters__types">
-            <section class="system-type-panel classification-system-types" :class="{ 'is-open': isSystemTypesOpen }" aria-label="Тип системы">
-              <button
-                class="system-type-toggle"
-                type="button"
-                :aria-expanded="isSystemTypesOpen"
-                @click="isSystemTypesOpen = !isSystemTypesOpen"
-              >
-                <span class="system-type-toggle__title">Тип системы</span>
-                <span class="system-type-toggle__selected">Выбрано: {{ selectedSystemType.name }}</span>
-                <i aria-hidden="true" />
-              </button>
-
-              <Transition name="system-type-body">
-                <div v-if="isSystemTypesOpen" class="system-type-body">
-                  <div class="system-type-grid">
-                    <button
-                      v-for="type in visibleSystemTypes"
-                      :key="type.name"
-                      class="system-type-card"
-                      :class="{ 'is-active': type.name === selectedSystemType.name }"
-                      type="button"
-                      @click="selectSystemType(type)"
-                    >
-                      <span class="system-type-card__image" aria-hidden="true">
-                        <Layers3 :size="25" :stroke-width="1.6" />
-                        <img v-if="type.imageUrl" :src="systemTypeImageSource(type)" alt="" loading="lazy" decoding="async" @error="hideBrokenSystemTypeImage" />
-                      </span>
-                      <span class="system-type-card__content">
-                        <strong>{{ type.name }}</strong>
-                        <span>{{ type.count }} систем</span>
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              </Transition>
-            </section>
-          </div>
-
-          <div class="changes-filters__group classification-page-filters__search-row">
-            <label class="search-field classification-search" :class="{ 'is-pending': isClassificationSearchPending, 'is-filtered': classificationCatalogSearchInput.trim() }">
-              <span>Поиск</span>
-              <span class="systems-search-control">
-                <Search :size="18" :stroke-width="1.8" aria-hidden="true" />
-                <input
-                  v-model="classificationCatalogSearchInput"
-                  type="search"
-                  placeholder="Поиск по названию или коду ЕКН"
-                  :aria-busy="isClassificationSearchPending"
-                  @input="scheduleClassificationCatalogSearch"
-                />
-              </span>
-            </label>
-            <span class="systems-reset-slot">
-              <Transition name="changes-reset">
-                <button
-                  v-if="hasActiveClassificationPageFilters"
-                  class="changes-reset-filters systems-reset-filters"
-                  type="button"
-                  title="Сбросить основные параметры"
-                  aria-label="Сбросить основные параметры"
-                  @click="resetClassificationPageFilters"
-                >
-                  <FunnelX :size="19" :stroke-width="1.8" aria-hidden="true" />
-                  <span class="systems-reset-filters__count" aria-hidden="true">{{ activeClassificationPageFilterCount }}</span>
-                </button>
-              </Transition>
-            </span>
-          </div>
-        </section>
-
-        <div class="classification-layout">
-          <div class="classification-main">
-            <section class="classification-results-toolbar" tabindex="-1" aria-label="Настройки отображения">
-              <div class="classification-results-toolbar__count">
-                <span class="classification-results-toolbar__icon" aria-hidden="true">
-                  <Layers3 :size="18" :stroke-width="1.8" />
-                </span>
-                <span>
-                  <small>Найдено систем</small>
-                  <strong>{{ classificationSystems.length }}</strong>
-                </span>
-              </div>
-              <span class="classification-results-toolbar__view-label">Вид</span>
-              <div class="classification-view-toggle" aria-label="Вид списка">
-                <button :class="{ 'is-active': classificationView === 'grid' }" type="button" aria-label="Карточки" @click="classificationView = 'grid'">
-                  <Grid2X2 :size="18" :stroke-width="1.8" aria-hidden="true" />
-                </button>
-                <button :class="{ 'is-active': classificationView === 'list' }" type="button" aria-label="Список" @click="classificationView = 'list'">
-                  <List :size="19" :stroke-width="1.8" aria-hidden="true" />
-                </button>
-              </div>
-            </section>
-
-            <section
-              class="classification-cards"
-              :class="{
-                'is-list-view': classificationView === 'list',
-                'is-empty-loading': isClassificationCatalogLoading && classificationSystems.length === 0,
-              }"
-              aria-label="Системы классификации"
-              aria-live="polite"
-            >
-            <Transition name="table-filter-loading">
-              <div
-                v-if="isClassificationCatalogLoading"
-                class="systems-table__filter-loading"
-                :class="{ 'systems-table__filter-loading--initial': classificationSystems.length === 0 }"
-                role="status"
-              >
-                <span>
-                  <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  Загружаем системы классификации…
-                </span>
-              </div>
-            </Transition>
-            <p v-if="classificationCatalogError" class="table-message table-message--error classification-cards__message">
-              {{ classificationCatalogError }}
-            </p>
-            <p v-else-if="!isClassificationCatalogLoading && classificationSystems.length === 0" class="table-message classification-cards__message">
-              {{ classificationEmptyMessage }}
-            </p>
-            <div v-for="(row, rowIndex) in classificationSystemRows" :key="rowIndex" class="classification-card-row">
-              <article
-                v-for="system in row"
-                :key="system.id"
-                v-memo="[system.id === openedClassificationSystemId]"
-                class="classification-card"
-                :class="`classification-card--${classModifier(system.systemClass)}`"
-              >
-                <header class="classification-card__header">
-                  <a :href="system.systemUrl || 'https://nav.tn.ru/systems/'" target="_blank" rel="noreferrer">{{ system.systemName }}</a>
-                  <a class="classification-card__source" :href="system.systemUrl || 'https://nav.tn.ru/systems/'" target="_blank" rel="noreferrer" aria-label="Открыть на nav.tn.ru">
-                    <Globe2 :size="15" :stroke-width="1.9" aria-hidden="true" />
-                  </a>
-                </header>
-
-                <span class="classification-card__code">{{ system.code }}</span>
-                <span class="classification-card__curator">Куратор: {{ system.curator || 'не указан' }}</span>
-                <span :class="`classification-card__status classification-card__status--${classModifier(system.systemClass)}`">
-                  <i aria-hidden="true" />
-                  {{ system.systemClass }}
-                </span>
-
-                <button
-                  class="classification-card__more"
-                  :class="{ 'is-open': openedClassificationSystemId === system.id }"
-                  type="button"
-                  :aria-expanded="openedClassificationSystemId === system.id"
-                  aria-label="Показать характеристики системы"
-                  @click="toggleClassificationSystem(system.id)"
-                >
-                  <MoreHorizontal :size="19" :stroke-width="2" aria-hidden="true" />
-                </button>
-              </article>
-
-              <div
-                v-if="openedClassificationSystem && row.some((system) => system.id === openedClassificationSystemId)"
-                class="classification-details-shell"
-              >
-                  <section class="classification-details">
-                    <div class="classification-details__header">
-                      <div class="classification-details__title">
-                        <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.8" /></span>
-                        <div>
-                          <small>Характеристики системы</small>
-                          <strong>{{ openedClassificationSystem.systemName }}</strong>
-                        </div>
-                      </div>
-                      <div class="classification-details__actions">
-                        <a v-if="openedClassificationSystem.systemUrl" :href="openedClassificationSystem.systemUrl" target="_blank" rel="noreferrer">
-                          Открыть на nav.tn.ru
-                          <ExternalLink :size="14" :stroke-width="1.9" aria-hidden="true" />
-                        </a>
-                        <button type="button" aria-label="Закрыть характеристики" @click="toggleClassificationSystem(openedClassificationSystem.id)">
-                          <X :size="17" :stroke-width="2" aria-hidden="true" />
-                        </button>
-                      </div>
-                    </div>
-                    <table v-if="openedClassificationSystem.characteristics?.length">
-                      <thead>
-                        <tr>
-                          <th>Наименование показателя</th>
-                          <th>Значение</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="characteristic in openedClassificationSystem.characteristics" :key="`${openedClassificationSystem.id}-${characteristic.position}`">
-                          <th>{{ characteristic.name }}</th>
-                          <td>{{ characteristic.value }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    <div v-else class="classification-details__empty">
-                      <span class="classification-details__empty-icon" aria-hidden="true">i</span>
-                      <div class="classification-details__empty-copy">
-                        <strong>Характеристики пока не загружены</strong>
-                        <p>Запустите парсер, чтобы добавить показатели и значения системы.</p>
-                      </div>
-                      <button type="button" class="classification-details__empty-action" @click="setPage('settings')">
-                        Перейти в настройки
-                      </button>
-                    </div>
-                  </section>
-              </div>
-            </div>
-            </section>
-
-            <footer v-if="classificationSystems.length" class="table-pagination classification-cards-pagination">
-              <span class="table-pagination__range">
-                Показано {{ classificationCatalogRangeStart() }}–{{ classificationCatalogRangeEnd() }} из {{ classificationSystems.length }}
-              </span>
-              <div class="table-pagination__controls">
-                <label>
-                  <span>Карточек на странице</span>
-                  <select v-model="classificationCatalogPageSize" @change="changeClassificationCatalogPageSize">
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="200">200</option>
-                    <option value="all">Все</option>
-                  </select>
-                </label>
-                <div v-if="classificationCatalogPageSize !== 'all'" class="table-pagination__pages">
-                  <button type="button" :disabled="classificationCatalogPage === 1" aria-label="Предыдущая страница" @click="changeClassificationCatalogPage(classificationCatalogPage - 1)">‹</button>
-                  <strong>{{ classificationCatalogPage }} / {{ classificationCatalogPageCount() }}</strong>
-                  <button type="button" :disabled="classificationCatalogPage >= classificationCatalogPageCount()" aria-label="Следующая страница" @click="changeClassificationCatalogPage(classificationCatalogPage + 1)">›</button>
-                </div>
-              </div>
-            </footer>
-          </div>
-
-          <aside class="classification-sidebar" aria-label="Характеристики системы">
-            <header class="classification-sidebar__header">
-              <div class="classification-sidebar__heading">
-                <span class="classification-sidebar__heading-icon" aria-hidden="true">
-                  <ListFilter :size="18" :stroke-width="1.9" />
-                </span>
-                <div>
-                  <strong>Характеристики системы</strong>
-                  <span>{{ classificationSystems.length }} из {{ classificationBaseSystems.length }} систем</span>
-                </div>
-              </div>
-              <button
-                type="button"
-                :disabled="selectedClassificationFilterCount === 0"
-                aria-label="Сбросить характеристики системы"
-                @click="clearClassificationFilters"
-              >
-                <RefreshCw :size="14" :stroke-width="1.8" aria-hidden="true" />
-                Сбросить
-              </button>
-            </header>
-            <div class="classification-sidebar__tools">
-              <label class="classification-sidebar__search">
-                <Search :size="15" :stroke-width="1.8" aria-hidden="true" />
-                <input v-model="classificationFilterSearch" type="search" placeholder="Найти характеристику" />
-                <button v-if="classificationFilterSearch" type="button" aria-label="Очистить поиск фильтров" @click="classificationFilterSearch = ''">
-                  <X :size="14" :stroke-width="2" aria-hidden="true" />
-                </button>
-              </label>
-              <button
-                class="classification-sidebar__collapse"
-                type="button"
-                :disabled="!openedClassificationFilter"
-                @click="collapseClassificationFilters"
-              >
-                <ChevronUp :size="14" :stroke-width="1.9" aria-hidden="true" />
-                Свернуть все
-              </button>
-            </div>
-            <div class="classification-sidebar__body">
-              <p v-if="!isClassificationCatalogLoading && classificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
-                Для выбранного типа нет доступных характеристик.
-              </p>
-              <p v-else-if="!isClassificationCatalogLoading && visibleClassificationFilterGroups.length === 0" class="table-message classification-sidebar__empty">
-                Характеристики не найдены.
-              </p>
-              <div
-                v-for="filter in visibleClassificationFilterGroups"
-                :key="filter"
-                class="classification-sidebar__group"
-                :class="{ 'is-open': openedClassificationFilter === filter, 'is-selected': selectedClassificationFilters[filter] }"
-              >
-                <button
-                  class="classification-sidebar__item"
-                  type="button"
-                  @click="toggleClassificationFilter(filter)"
-                >
-                  <span class="classification-sidebar__label">
-                    <strong>{{ filter }}</strong>
-                    <small v-if="selectedClassificationFilters[filter]">{{ selectedClassificationFilters[filter] }}</small>
-                  </span>
-                  <i aria-hidden="true" />
-                </button>
-                <Transition name="classification-filter-options">
-                  <div v-if="openedClassificationFilter === filter" class="classification-sidebar__options-shell">
-                    <div class="classification-sidebar__options">
-                      <button type="button" :class="{ 'is-selected': !selectedClassificationFilters[filter] }" @click="selectClassificationFilter(filter, '')">
-                        <span>Все</span>
-                        <small>{{ classificationFilterAvailableCount(filter) }}</small>
-                      </button>
-                      <button
-                        v-for="option in classificationFilterOptions(filter)"
-                        :key="option"
-                        type="button"
-                        :class="{ 'is-selected': selectedClassificationFilters[filter] === option }"
-                        @click="selectClassificationFilter(filter, option)"
-                      >
-                        <span>{{ option }}</span>
-                        <small>{{ classificationFilterOptionCount(filter, option) }}</small>
-                      </button>
-                    </div>
-                  </div>
-                </Transition>
-              </div>
-            </div>
-          </aside>
-        </div>
-      </section>
-
-      <section v-else-if="activePage === 'comparison'" class="comparison-page">
-        <section class="comparison-controls">
-          <div class="comparison-controls__intro">
-            <span class="comparison-controls__intro-icon" aria-hidden="true">
-              <Scale :size="24" :stroke-width="1.8" />
-            </span>
-            <div>
-              <h1>Сравнение систем</h1>
-              <p>Выберите распоряжения, изменения классов систем по которым нужно сравнить.</p>
-            </div>
-          </div>
-
-          <div class="comparison-controls__orders">
-            <span class="comparison-controls__label">Сравниваемые распоряжения</span>
-            <div class="comparison-controls__row">
-              <div
-                v-for="(orderId, index) in comparisonOrderIds"
-                :key="orderId"
-                class="custom-select comparison-order"
-                :class="{
-                  'is-open': openedSelect === `comparison-${index}`,
-                  'is-dragging': draggedComparisonOrderId === orderId,
-                  'is-drop-target': comparisonDropIndex === index && draggedComparisonOrderId !== orderId,
-                }"
-                @dragenter.prevent="enterComparisonOrderDrop(index)"
-                @dragover.prevent
-                @drop.prevent="dropComparisonOrder(index)"
-              >
-                <div class="comparison-order__control">
-                  <button class="custom-select__button" type="button" @click.stop="toggleSelect(`comparison-${index}`)">
-                    <span class="comparison-order__number">{{ index + 1 }}</span>
-                    <span class="comparison-order__name">{{ comparisonOrderName(orderId) }}</span>
-                    <ChevronDown class="comparison-order__chevron" :size="17" :stroke-width="1.8" aria-hidden="true" />
-                  </button>
-                  <span
-                    class="comparison-order__drag"
-                    draggable="true"
-                    :aria-grabbed="draggedComparisonOrderId === orderId"
-                    title="Перетащите, чтобы изменить порядок"
-                    @dragstart="startComparisonOrderDrag($event, orderId)"
-                    @dragend="endComparisonOrderDrag"
-                  >
-                    <GripVertical :size="18" :stroke-width="2" aria-hidden="true" />
-                  </span>
-                </div>
-                <Transition name="select-menu">
-                  <div v-if="openedSelect === `comparison-${index}`" class="custom-select__menu comparison-order-menu">
-                    <button
-                      v-for="option in comparisonOrderOptions(orderId)"
-                      :key="option.id"
-                      class="custom-select__option"
-                      :class="{ 'is-selected': option.id === orderId }"
-                      type="button"
-                      @click="selectComparisonOrder(index, option)"
-                    >
-                      {{ option.name }}
-                    </button>
-                    <span class="comparison-order-menu__separator" aria-hidden="true" />
-                    <button class="comparison-order-menu__delete" type="button" @click="removeComparisonOrder(orderId)">
-                      <Trash2 :size="17" :stroke-width="1.8" aria-hidden="true" />
-                      <span>Удалить распоряжение</span>
-                    </button>
-                  </div>
-                </Transition>
-              </div>
-
-              <div class="comparison-add-wrap">
-                <div class="custom-select comparison-add-select" :class="{ 'is-open': openedSelect === 'comparison-add' }">
-                  <button
-                    class="comparison-add-button"
-                    type="button"
-                    :disabled="comparisonOrderIds.length >= MAX_COMPARISON_ORDERS || availableComparisonOrders().length === 0"
-                    aria-label="Добавить распоряжение"
-                    :title="comparisonOrderIds.length >= MAX_COMPARISON_ORDERS ? 'Можно сравнить не более 6 распоряжений' : availableComparisonOrders().length ? 'Добавить распоряжение' : 'Все распоряжения уже добавлены'"
-                    @click.stop="toggleSelect('comparison-add')"
-                  >
-                    <Plus :size="20" :stroke-width="2" aria-hidden="true" />
-                    <span>Добавить распоряжение</span>
-                  </button>
-                  <Transition name="select-menu">
-                    <div v-if="openedSelect === 'comparison-add' && comparisonOrderIds.length < MAX_COMPARISON_ORDERS && availableComparisonOrders().length" class="custom-select__menu comparison-add-menu">
-                      <button v-for="order in availableComparisonOrders()" :key="order.id" class="custom-select__option" type="button" @click="addComparisonOrder(order)">
-                        {{ order.name }}
-                      </button>
-                    </div>
-                  </Transition>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <p v-if="comparisonError" class="table-message table-message--error">{{ comparisonError }}</p>
-
-        <section class="comparison-toolbar" aria-label="Управление сравнением">
-          <div class="comparison-toolbar__summary">
-            <span class="comparison-toolbar__icon" aria-hidden="true"><Layers3 :size="22" :stroke-width="1.8" /></span>
-            <span>
-              <small>Систем в таблице</small>
-              <strong>{{ comparisonRows().length }} <em>шт.</em></strong>
-            </span>
-          </div>
-          <div class="comparison-toolbar__actions">
-            <div class="custom-select comparison-difference-filter" :class="{ 'is-open': openedSelect === 'comparison-filter', 'is-active': comparisonOnlyDifferences }">
-              <button class="comparison-difference-toggle" type="button" aria-label="Фильтр сравнения" @click.stop="toggleSelect('comparison-filter')">
-                <Repeat2 v-if="comparisonOnlyDifferences" :size="17" :stroke-width="1.8" aria-hidden="true" />
-                <Layers3 v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
-                <span>{{ comparisonOnlyDifferences ? 'Только различия' : 'Все системы' }}</span>
-                <ChevronDown class="comparison-difference-chevron" :size="16" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'comparison-filter'" class="custom-select__menu comparison-difference-menu">
-                  <button type="button" :class="{ 'is-selected': !comparisonOnlyDifferences }" @click="selectComparisonDifferenceFilter(false)">
-                    <Layers3 :size="16" :stroke-width="1.8" aria-hidden="true" />
-                    <span>Все системы</span>
-                  </button>
-                  <button type="button" :class="{ 'is-selected': comparisonOnlyDifferences }" @click="selectComparisonDifferenceFilter(true)">
-                    <Repeat2 :size="16" :stroke-width="1.8" aria-hidden="true" />
-                    <span>Только различия</span>
-                  </button>
-                </div>
-              </Transition>
-            </div>
-            <div class="custom-select comparison-sort" :class="{ 'is-open': openedSelect === 'comparison-sort' }">
-              <button class="comparison-sort__button" type="button" aria-label="Сортировка сравнения" @click.stop="toggleSelect('comparison-sort')">
-                <ListFilter v-if="comparisonSort === 'differences-first'" :size="17" :stroke-width="1.8" aria-hidden="true" />
-                <ArrowDownUp v-else :size="17" :stroke-width="1.8" aria-hidden="true" />
-                <span>{{ comparisonSortLabel() }}</span>
-                <ChevronDown class="comparison-sort__chevron" :size="16" :stroke-width="1.8" aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'comparison-sort'" class="custom-select__menu comparison-sort__menu">
-                  <button type="button" :class="{ 'is-selected': comparisonSort === 'differences-first' }" @click="selectComparisonSort('differences-first')">
-                    <ListFilter :size="16" :stroke-width="1.8" aria-hidden="true" />
-                    <span>Различия сначала</span>
-                  </button>
-                  <button type="button" :class="{ 'is-selected': comparisonSort === 'name-asc' }" @click="selectComparisonSort('name-asc')">
-                    <ArrowDownUp :size="16" :stroke-width="1.8" aria-hidden="true" />
-                    <span>Без префикса (А–Я)</span>
-                  </button>
-                  <button type="button" :class="{ 'is-selected': comparisonSort === 'name-desc' }" @click="selectComparisonSort('name-desc')">
-                    <ArrowDownUp :size="16" :stroke-width="1.8" aria-hidden="true" />
-                    <span>Без префикса (Я–А)</span>
-                  </button>
-                </div>
-              </Transition>
-            </div>
-            <button class="export-button comparison-export-button" type="button" :disabled="comparisonRows().length === 0" @click="exportComparisonTable">
-              <span>Экспорт</span>
-              <img class="export-button__xlsx-icon" :src="xlsxFileIcon" alt="" aria-hidden="true" />
-            </button>
-          </div>
-        </section>
-
-        <div
-          class="systems-table comparison-table"
-          :class="{ 'is-empty-loading': isComparisonLoading && comparisonRows().length === 0 }"
-        >
-          <Transition name="table-filter-loading">
-            <div
-              v-if="isComparisonLoading"
-              class="systems-table__filter-loading"
-              :class="{ 'systems-table__filter-loading--initial': comparisonRows().length === 0 }"
-              role="status"
-              aria-live="polite"
-            >
-              <span>
-                <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
-                Загружаем сравнение…
-              </span>
-            </div>
-          </Transition>
-          <table>
-            <thead>
-              <tr>
-                <th>Название системы <ArrowDownUp :size="15" :stroke-width="1.7" aria-hidden="true" /></th>
-                <th v-for="(orderId, index) in comparisonOrderIds" :key="orderId">
-                  <span class="comparison-table__order">
-                    <i>{{ index + 1 }}</i>
-                    <span :title="comparisonOrderName(orderId)">{{ comparisonOrderName(orderId) }}</span>
-                  </span>
-                </th>
-                <th>Действие</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="!isComparisonLoading && comparisonRows().length === 0">
-                <td class="empty-table-cell" :colspan="comparisonOrderIds.length + 2">
-                  В выбранных распоряжениях пока нет данных таблицы 2
-                </td>
-              </tr>
-              <tr v-for="row in visibleComparisonRows()" :key="row.key" :class="{ 'has-difference': comparisonRowHasDifference(row) }">
-                <td class="comparison-system-cell">
-                  <span>{{ row.name }}</span>
-                  <small v-if="comparisonRowHasDifference(row)">
-                    <Repeat2 :size="12" :stroke-width="1.9" aria-hidden="true" />
-                    Есть различия
-                  </small>
-                </td>
-                <td
-                  v-for="(_, index) in comparisonOrderIds"
-                  :key="`${row.name}-${index}`"
-                  :class="`comparison-value-cell comparison-value-cell--${classModifier(comparisonValue(row, index)) || 'empty'}`"
-                >
-                  <span :class="`comparison-status comparison-status--${classModifier(comparisonValue(row, index)) || 'empty'}`">
-                    <CircleCheck v-if="classModifier(comparisonValue(row, index)) === 'recommended'" :size="14" :stroke-width="2.2" aria-hidden="true" />
-                    <TriangleAlert v-else-if="classModifier(comparisonValue(row, index)) === 'allowed'" :size="15" :stroke-width="2" aria-hidden="true" />
-                    <X v-else-if="classModifier(comparisonValue(row, index)) === 'forbidden'" :size="14" :stroke-width="2.2" aria-hidden="true" />
-                    {{ comparisonValue(row, index) }}
-                  </span>
-                </td>
-                <td>
-                  <button class="comparison-delete-button" type="button" aria-label="Удалить из сравнения" @click="hideComparisonRow(row)">
-                    <Trash2 :size="17" :stroke-width="1.8" aria-hidden="true" />
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <footer v-if="comparisonRows().length > 0" class="table-pagination comparison-table-pagination">
-          <span class="table-pagination__range">
-            Показано {{ comparisonRangeStart() }}–{{ comparisonRangeEnd() }} из {{ comparisonRows().length }}
-          </span>
-          <div class="table-pagination__controls">
-            <label>
-              <span>Строк на странице</span>
-              <select v-model="comparisonPageSize" @change="changeComparisonPageSize">
-                <option value="50">50</option>
-                <option value="100">100</option>
-                <option value="all">Все</option>
-              </select>
-            </label>
-            <div v-if="comparisonPageSize !== 'all'" class="table-pagination__pages">
-              <button type="button" :disabled="comparisonPage === 1" aria-label="Предыдущая страница" @click="changeComparisonPage(comparisonPage - 1)">‹</button>
-              <strong>{{ comparisonPage }} / {{ comparisonPageCount() }}</strong>
-              <button type="button" :disabled="comparisonPage >= comparisonPageCount()" aria-label="Следующая страница" @click="changeComparisonPage(comparisonPage + 1)">›</button>
-            </div>
-          </div>
-        </footer>
-      </section>
-
-      <section v-else-if="activePage === 'settings'" class="settings-page">
-        <section class="settings-section parser-settings" aria-labelledby="parser-settings-title">
-          <div class="parser-settings__main">
-            <div class="parser-settings__identity">
-              <span class="parser-settings__icon" aria-hidden="true">
-                <RefreshCw :size="42" :stroke-width="1.8" />
-              </span>
-              <div class="parser-settings__content">
-                <h1 id="parser-settings-title">Парсинг навигатора</h1>
-                <div class="parser-settings__schedule">
-                  <span>Автозапуск каждые <strong>{{ navParserIntervalDays }}</strong> дн.</span>
-                  <small>{{ navParserNextRunLabel() }}</small>
-                </div>
-              </div>
-            </div>
-            <div class="parser-settings__controls">
-              <button
-                class="import-button parser-settings__button"
-                :class="{ 'parser-settings__button--stop': isNavParsing }"
-                type="button"
-                :disabled="isNavParserCancelling"
-                @click="isNavParsing ? cancelNavParser() : runNavParser()"
-              >
-                {{ isNavParserCancelling ? 'Останавливаем…' : isNavParsing ? 'Остановить парсинг' : 'Запустить парсер' }}
-              </button>
-            </div>
-          </div>
-          <section v-if="navParserProgress.running || navParserProgress.logs.length" class="parser-progress" aria-live="polite">
-            <header class="parser-progress__header">
-              <div>
-                <span class="parser-progress__state" :class="{ 'is-running': navParserProgress.running }">
-                  <RefreshCw v-if="navParserProgress.running" :size="15" :stroke-width="2" aria-hidden="true" />
-                  <CircleCheck v-else-if="navParserProgress.percent === 100" :size="15" :stroke-width="2" aria-hidden="true" />
-                  <Info v-else :size="15" :stroke-width="2" aria-hidden="true" />
-                  {{ navParserProgress.stage }}
-                </span>
-                <strong>{{ navParserProgress.message }}</strong>
-              </div>
-              <b>{{ navParserProgress.percent }}%</b>
-            </header>
-            <div
-              class="parser-progress__track"
-              role="progressbar"
-              :aria-valuenow="navParserProgress.percent"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              :aria-label="`Прогресс парсера: ${navParserProgress.percent}%`"
-            >
-              <span :style="{ width: `${navParserProgress.percent}%` }" />
-            </div>
-            <div class="parser-progress__stats">
-              <span><small>Обработано</small><strong>{{ navParserProgress.processed }} / {{ navParserProgress.total }}</strong></span>
-              <span><small>Найдено</small><strong>{{ navParserProgress.found }}</strong></span>
-              <span><small>Обновлено</small><strong>{{ navParserProgress.updated }}</strong></span>
-              <span><small>Не найдено</small><strong>{{ navParserProgress.notFound }}</strong></span>
-              <span><small>Ошибки</small><strong>{{ navParserProgress.failed }}</strong></span>
-            </div>
-            <section class="parser-log">
-              <button
-                class="parser-log__toggle"
-                type="button"
-                :aria-expanded="isNavParserLogOpen"
-                @click="isNavParserLogOpen = !isNavParserLogOpen"
-              >
-                <span>Журнал выполнения</span>
-                <span class="parser-log__toggle-meta">
-                  <small>{{ navParserProgress.logs.length }} записей</small>
-                  <ChevronDown :size="16" :stroke-width="2" :class="{ 'is-open': isNavParserLogOpen }" aria-hidden="true" />
-                </span>
-              </button>
-              <Transition name="parser-log-body">
-                <div v-if="isNavParserLogOpen" class="parser-log__body">
-                  <div class="parser-log__entries">
-                    <p v-for="(entry, index) in navParserLogsNewestFirst" :key="`${entry.time}-${index}`" :class="`parser-log__entry parser-log__entry--${entry.level}`">
-                      <time>{{ formatNavParserLogTime(entry.time) }}</time>
-                      <i aria-hidden="true" />
-                      <span>{{ entry.message }}</span>
-                    </p>
-                  </div>
-                </div>
-              </Transition>
-            </section>
-          </section>
-          <section class="parser-options-section">
-            <button
-              class="parser-options__toggle"
-              type="button"
-              :aria-expanded="isNavParserHistoryOpen"
-              @click="isNavParserHistoryOpen = !isNavParserHistoryOpen"
-            >
-              <span>Журнал запусков</span>
-              <ChevronDown :class="{ 'is-open': isNavParserHistoryOpen }" :size="17" :stroke-width="1.9" aria-hidden="true" />
-            </button>
-            <Transition name="parser-options">
-              <div v-if="isNavParserHistoryOpen" class="parser-options__shell">
-                <section class="parser-history" aria-label="Журнал запусков">
-                  <p v-if="!navParserRuns.length" class="parser-history__empty">Завершённых запусков пока нет.</p>
-                  <div v-else class="parser-history__list">
-              <article v-for="run in navParserRuns" :key="run.id" class="parser-history__run" :class="`is-${run.status}`">
-                <button
-                  class="parser-history__run-toggle"
-                  type="button"
-                  :aria-expanded="openedNavParserRunId === run.id"
-                  @click="openedNavParserRunId = openedNavParserRunId === run.id ? null : run.id"
-                >
-                  <span class="parser-history__status" aria-hidden="true">
-                    <CircleCheck v-if="run.status === 'completed'" :size="17" :stroke-width="2" />
-                    <X v-else-if="run.status === 'canceled'" :size="17" :stroke-width="2" />
-                    <TriangleAlert v-else :size="17" :stroke-width="2" />
-                  </span>
-                  <span class="parser-history__identity">
-                    <strong>{{ formatNavParserRunDate(run.startedAt) }}</strong>
-                    <small>{{ navParserSourceLabel(run.source) }} · {{ formatNavParserRunDuration(run) }}</small>
-                  </span>
-                  <span class="parser-history__summary">
-                    <span>Обновлено <b>{{ run.updated }}</b></span>
-                    <span>Не найдено <b>{{ run.notFound }}</b></span>
-                    <span>Ошибки <b>{{ run.failed }}</b></span>
-                  </span>
-                  <ChevronDown :size="18" :stroke-width="2" :class="{ 'is-open': openedNavParserRunId === run.id }" aria-hidden="true" />
-                </button>
-                <Transition name="parser-log-body">
-                  <div v-if="openedNavParserRunId === run.id" class="parser-log__body parser-history__log-body">
-                    <div class="parser-log__entries">
-                      <p v-for="(entry, index) in navParserRunLogsNewestFirst(run)" :key="`${run.id}-${entry.time}-${index}`" :class="`parser-log__entry parser-log__entry--${entry.level}`">
-                        <time>{{ formatNavParserLogTime(entry.time) }}</time>
-                        <i aria-hidden="true" />
-                        <span>{{ entry.message }}</span>
-                      </p>
-                    </div>
-                  </div>
-                </Transition>
-              </article>
-                  </div>
-                </section>
-              </div>
-            </Transition>
-          </section>
-          <section class="parser-options-section">
-            <button
-              class="parser-options__toggle"
-              type="button"
-              :aria-expanded="isNavParserSettingsOpen"
-              @click="isNavParserSettingsOpen = !isNavParserSettingsOpen"
-            >
-              <span>Настройки</span>
-              <ChevronDown :class="{ 'is-open': isNavParserSettingsOpen }" :size="17" :stroke-width="1.9" aria-hidden="true" />
-            </button>
-            <Transition name="parser-options">
-              <div v-if="isNavParserSettingsOpen" class="parser-options__shell">
-                <div class="parser-options">
-                  <div class="parser-options__heading">
-                    <div>
-                      <strong>Расширенные настройки</strong>
-                    </div>
-                    <button class="parser-options__save" type="button" :disabled="isNavSettingsSaving" @click="saveNavParserSettings">
-                      {{ isNavSettingsSaving ? 'Сохранение…' : 'Сохранить настройки' }}
-                    </button>
-                  </div>
-                  <div class="parser-options__grid">
-                    <label>
-                      <span>Период обновления</span>
-                      <small>Через сколько дней парсер сам запустится снова.</small>
-                      <span class="parser-options__input"><input v-model.number="navParserIntervalDays" type="number" min="1" max="365" /><em>дней</em></span>
-                    </label>
-                    <label>
-                      <span>Параллельные запросы</span>
-                      <small>Сколько страниц nav.tn.ru загружать одновременно. Рекомендуемое значение — 4.</small>
-                      <span class="parser-options__input"><input v-model.number="navParserWorkerCount" type="number" min="1" max="10" /><em>шт.</em></span>
-                    </label>
-                    <label>
-                      <span>Тайм-аут запроса</span>
-                      <small>Сколько ждать ответа сайта, прежде чем считать запрос неудачным. Рекомендуется 35 секунд.</small>
-                      <span class="parser-options__input"><input v-model.number="navParserRequestTimeout" type="number" min="5" max="120" /><em>сек.</em></span>
-                    </label>
-                    <label>
-                      <span>Количество попыток</span>
-                      <small>Сколько раз повторить запрос, если сайт временно не ответил. Безопасное значение — 3.</small>
-                      <span class="parser-options__input"><input v-model.number="navParserRetryAttempts" type="number" min="1" max="5" /><em>раз</em></span>
-                    </label>
-                    <label>
-                      <span>Задержка между попытками</span>
-                      <small>Пауза перед повторным запросом.</small>
-                      <span class="parser-options__input"><input v-model.number="navParserRetryDelay" type="number" min="1" max="30" /><em>сек.</em></span>
-                    </label>
-                    <label class="parser-options__switch">
-                      <span>
-                        <strong>Резервный поиск</strong>
-                        <small>Если система не найдена в общем каталоге, искать её отдельно через поиск nav.tn.ru.</small>
-                      </span>
-                      <input v-model="navParserFallbackSearch" type="checkbox" />
-                    </label>
-                  </div>
-                </div>
-              </div>
-            </Transition>
-          </section>
-          <p v-if="navSettingsError" class="table-message table-message--error">{{ navSettingsError }}</p>
-          <p v-else-if="navSettingsMessage" class="table-message table-message--success">{{ navSettingsMessage }}</p>
-          <p v-if="navParseError" class="table-message table-message--error">{{ navParseError }}</p>
-          <p v-else-if="navParseMessage" class="table-message table-message--success">{{ navParseMessage }}</p>
-          <details v-if="navParseNotFound.length" class="parser-settings__not-found">
-            <summary>Не найденные на nav.tn.ru системы ({{ navParseNotFound.length }})</summary>
-            <ul>
-              <li v-for="systemName in navParseNotFound" :key="systemName">{{ systemName }}</li>
-            </ul>
-          </details>
-          <details v-if="navParseFailedSystems.length" class="parser-settings__not-found parser-settings__failed">
-            <summary>Ошибки загрузки систем ({{ navParseFailedSystems.length }})</summary>
-            <ul>
-              <li v-for="systemName in navParseFailedSystems" :key="systemName">{{ systemName }}</li>
-            </ul>
-          </details>
-        </section>
-
-        <div class="settings-orders-group">
-        <section class="settings-section orders-settings" aria-labelledby="orders-db-title">
-          <div class="settings-section__header settings-orders-header">
-            <div class="settings-orders-heading">
-              <span class="settings-orders-heading__icon" aria-hidden="true">
-                <Database :size="22" :stroke-width="1.8" />
-              </span>
-              <div>
-                <span class="settings-section__eyebrow">Распоряжения</span>
-                <span class="settings-orders-heading__title">
-                  <h2 id="orders-db-title">Управление базами данных</h2>
-                  <em>Баз: {{ orders.length }}</em>
-                </span>
-              </div>
-            </div>
-            <div class="settings-orders-actions">
-              <button class="settings-create-order settings-create-order--secondary" type="button" :disabled="isOrderWorkbookImporting" @click="createOrder">
-                <Plus :size="18" :stroke-width="1.8" aria-hidden="true" />
-                Создать вручную
-              </button>
-              <button class="settings-create-order" type="button" :disabled="isOrderWorkbookImporting" @click="openOrderWorkbookImport">
-                <CloudUpload :size="18" :stroke-width="1.8" aria-hidden="true" />
-                {{ isOrderWorkbookImporting ? 'Импорт...' : 'Импорт XLSX' }}
-              </button>
-              <input
-                ref="orderWorkbookInput"
-                class="visually-hidden-input"
-                type="file"
-                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                @change="importOrderWorkbook"
-              />
-            </div>
-          </div>
-
-          <div
-            class="systems-table settings-orders-table settings-table-scroll"
-            :class="{ 'is-empty-loading': isOrdersLoading && orders.length === 0 }"
-          >
-            <Transition name="table-filter-loading">
-              <div
-                v-if="isOrdersLoading"
-                class="systems-table__filter-loading"
-                :class="{ 'systems-table__filter-loading--initial': orders.length === 0 }"
-                role="status"
-                aria-live="polite"
-              >
-                <span>
-                  <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
-                  Загружаем распоряжения…
-                </span>
-              </div>
-            </Transition>
-            <table>
-              <thead>
-                <tr>
-                  <th>Распоряжение</th>
-                  <th>Дата создания</th>
-                  <th>Последняя актуализация</th>
-                  <th>Действия</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-if="!isOrdersLoading && orders.length === 0">
-                  <td class="empty-table-cell" colspan="4">Распоряжений пока нет</td>
-                </tr>
-                <tr v-for="order in visibleOrders" :key="order.id">
-                  <td>
-                    <span class="settings-order-name">
-                      <i aria-hidden="true"><Database :size="17" :stroke-width="1.8" /></i>
-                      <input
-                        v-model="order.name"
-                        class="order-name-input"
-                        type="text"
-                        aria-label="Название распоряжения"
-                        @input="scheduleOrderRename(order)"
-                        @blur="saveOrderName(order)"
-                        @keyup.enter="($event.target as HTMLInputElement).blur()"
-                      />
-                    </span>
-                  </td>
-                  <td class="settings-order-date"><span>Создана</span><strong>{{ formatOrderDateTime(order.createdAt) }}</strong></td>
-                  <td class="settings-order-date settings-order-date--updated"><span>Обновлена</span><strong>{{ formatOrderDateTime(order.updatedAt) }}</strong></td>
-                  <td class="settings-order-actions">
-                    <button class="settings-order-menu-button" type="button" aria-label="Действия с распоряжением" @click.stop="settingsOrderMenuId = settingsOrderMenuId === order.id ? null : order.id">
-                      <EllipsisVertical :size="19" :stroke-width="1.9" aria-hidden="true" />
-                    </button>
-                    <Transition name="select-menu">
-                      <div v-if="settingsOrderMenuId === order.id" class="settings-order-menu">
-                        <button type="button" @click="settingsOrderMenuId = null; deleteOrder(order)">
-                          <Trash2 :size="16" :stroke-width="1.8" aria-hidden="true" />
-                          Удалить БД
-                        </button>
-                      </div>
-                    </Transition>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <p v-if="ordersError" class="table-message table-message--error">{{ ordersError }}</p>
-        </section>
-        <footer v-if="!isOrdersLoading && orders.length > 0" class="table-pagination settings-orders-pagination">
-          <span class="table-pagination__range">
-            Показано {{ ordersRangeStart() }}–{{ ordersRangeEnd() }} из {{ orders.length }}
-          </span>
-          <div class="table-pagination__controls">
-            <label>
-              <span>Записей на странице</span>
-              <select v-model="ordersPageSize" @change="changeOrdersPageSize">
-                <option value="5">5</option>
-                <option value="10">10</option>
-                <option value="20">20</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-                <option value="all">Все</option>
-              </select>
-            </label>
-            <div v-if="ordersPageSize !== 'all'" class="table-pagination__pages">
-              <button type="button" :disabled="ordersPage === 1" aria-label="Предыдущая страница" @click="changeOrdersPage(ordersPage - 1)">‹</button>
-              <strong>{{ ordersPage }} / {{ ordersPageCount() }}</strong>
-              <button type="button" :disabled="ordersPage >= ordersPageCount()" aria-label="Следующая страница" @click="changeOrdersPage(ordersPage + 1)">›</button>
-            </div>
-          </div>
-        </footer>
-        </div>
-
-        <section class="settings-section settings-editor" aria-labelledby="edit-db-title">
-          <div class="settings-section__header">
-            <h2 id="edit-db-title">Редактирование БД</h2>
-          </div>
-
-          <div class="settings-edit-select">
-            <span>Выбрать БД распоряжения для редактирования</span>
-            <div class="custom-select" :class="{ 'is-open': openedSelect === 'settings-order' }">
-              <button class="custom-select__button" type="button" @click.stop="toggleSelect('settings-order')">
-                <span>{{ selectedOrderName() }}</span>
-                <i aria-hidden="true" />
-              </button>
-              <Transition name="select-menu">
-                <div v-if="openedSelect === 'settings-order'" class="custom-select__menu">
-                  <button
-                    v-for="order in orders"
-                    :key="order.id"
-                    class="custom-select__option"
-                    :class="{ 'is-selected': order.id === selectedOrderId }"
-                    type="button"
-                    @click="selectOrder(order)"
-                  >
-                    {{ order.name }}
-                  </button>
-                </div>
-              </Transition>
-            </div>
-          </div>
-
-          <section class="settings-table-block settings-classification-block" aria-label="Таблица 1">
-            <div class="settings-table-toolbar">
-              <span>Таблица 1</span>
-              <label class="settings-search">
-                <input
-                  v-model="tableSearch"
-                  type="search"
-                  placeholder="Поиск по названию или ЕКН"
-                  @input="settingsClassificationPage = 1"
-                />
-              </label>
-              <button class="import-button" type="button" :disabled="isClassificationLoading" @click="openTableImport">
-                <CloudUpload :size="17" :stroke-width="1.8" aria-hidden="true" />
-                {{ isClassificationLoading ? 'Импорт...' : 'Импортировать таблицу' }}
-              </button>
-              <input
-                ref="importFileInput"
-                class="visually-hidden-input"
-                type="file"
-                accept=".xlsx"
-                @change="importTableFile"
-              />
-            </div>
-
-            <p v-if="classificationError" class="table-message table-message--error">{{ classificationError }}</p>
-
-            <div
-              class="systems-table settings-data-table settings-paginated-table settings-classification-table"
-              :class="{ 'is-empty-loading': isClassificationLoading && currentSettingsClassificationRows().length === 0 }"
-            >
-              <Transition name="table-filter-loading">
-                <div
-                  v-if="isClassificationLoading"
-                  class="systems-table__filter-loading"
-                  :class="{ 'systems-table__filter-loading--initial': currentSettingsClassificationRows().length === 0 }"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span>
-                    <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
-                    {{ classificationLoadingMessage }}
-                  </span>
-                </div>
-              </Transition>
-              <table>
-                <thead>
-                  <tr>
-                    <th rowspan="2">Название системы</th>
-                    <th colspan="2">
-                      <span class="settings-class-header">
-                        <span>Класс</span>
-                        <button
-                          type="button"
-                          :class="{ 'is-unlocked': isSettingsClassificationUnlocked }"
-                          :aria-label="isSettingsClassificationUnlocked ? 'Заблокировать редактирование' : 'Разрешить редактирование'"
-                          :title="isSettingsClassificationUnlocked ? 'Редактирование разрешено' : 'Редактирование заблокировано'"
-                          @click="isSettingsClassificationUnlocked = !isSettingsClassificationUnlocked"
-                        >
-                          <Unlock v-if="isSettingsClassificationUnlocked" :size="16" :stroke-width="2" aria-hidden="true" />
-                          <Lock v-else :size="16" :stroke-width="2" aria-hidden="true" />
-                        </button>
-                      </span>
-                    </th>
-                  </tr>
-                  <tr>
-                    <th><span class="settings-class-heading settings-class-heading--before">Было</span></th>
-                    <th><span class="settings-class-heading settings-class-heading--after">Стало</span></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-if="!isClassificationLoading && currentSettingsClassificationRows().length === 0">
-                    <td class="empty-table-cell" colspan="3">В этом распоряжении пока нет данных таблицы 1</td>
-                  </tr>
-                  <tr v-for="row in visibleSettingsClassificationRows()" :key="`settings-${row.id}`">
-                    <td>
-                      <input
-                        v-model="row.systemName"
-                        class="settings-cell-input"
-                        type="text"
-                        :disabled="!isSettingsClassificationUnlocked"
-                        aria-label="Название системы"
-                        @input="scheduleClassificationRowSave(row)"
-                        @blur="saveClassificationRow(row)"
-                      />
-                    </td>
-                    <td :class="classModifier(row.classBefore) && `status-cell status-cell--${classModifier(row.classBefore)}`">
-                      <select v-model="row.classBefore" :disabled="!isSettingsClassificationUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.classBefore) || 'new'}`" aria-label="Класс было" @change="saveClassificationRow(row)">
-                        <option value="Новая система">Новая система</option>
-                        <option v-for="option in classOptions" :key="`before-${option}`" :value="option">{{ option }}</option>
-                      </select>
-                    </td>
-                    <td :class="classModifier(row.classAfter) && `status-cell status-cell--${classModifier(row.classAfter)}`">
-                      <select v-model="row.classAfter" :disabled="!isSettingsClassificationUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.classAfter) || 'new'}`" aria-label="Класс стало" @change="saveClassificationRow(row)">
-                        <option v-for="option in classOptions" :key="`after-${option}`" :value="option">{{ option }}</option>
-                      </select>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <footer v-if="!isClassificationLoading && currentSettingsClassificationRows().length > 0" class="table-pagination settings-table-pagination">
-              <span class="table-pagination__range">
-                Показано {{ settingsClassificationRangeStart() }}–{{ settingsClassificationRangeEnd() }} из {{ currentSettingsClassificationRows().length }}
-              </span>
-              <div class="table-pagination__controls">
-                <label>
-                  <span>Записей на странице</span>
-                  <select v-model="settingsClassificationPageSize" @change="changeSettingsClassificationPageSize">
-                    <option value="10">10</option>
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="all">Все</option>
-                  </select>
-                </label>
-                <div v-if="settingsClassificationPageSize !== 'all'" class="table-pagination__pages">
-                  <button type="button" :disabled="settingsClassificationPage === 1" aria-label="Предыдущая страница" @click="changeSettingsClassificationPage(settingsClassificationPage - 1)">‹</button>
-                  <strong>{{ settingsClassificationPage }} / {{ settingsClassificationPageCount() }}</strong>
-                  <button type="button" :disabled="settingsClassificationPage >= settingsClassificationPageCount()" aria-label="Следующая страница" @click="changeSettingsClassificationPage(settingsClassificationPage + 1)">›</button>
-                </div>
-              </div>
-            </footer>
-          </section>
-
-          <section class="settings-table-block settings-system-catalog-block" aria-label="Таблица 2">
-            <div class="settings-table-toolbar">
-              <span>Таблица 2</span>
-              <label class="settings-search">
-                <input
-                  v-model="systemCatalogSearch"
-                  type="search"
-                  placeholder="Поиск по названию или ЕКН"
-                  @input="settingsSystemCatalogPage = 1"
-                />
-              </label>
-              <button class="import-button" type="button" :disabled="isSystemCatalogLoading" @click="openSystemCatalogImport">
-                <CloudUpload :size="17" :stroke-width="1.8" aria-hidden="true" />
-                {{ isSystemCatalogLoading ? 'Импорт...' : 'Импортировать таблицу' }}
-              </button>
-              <input
-                ref="systemCatalogFileInput"
-                class="visually-hidden-input"
-                type="file"
-                accept=".xlsx"
-                @change="importSystemCatalogFile"
-              />
-            </div>
-
-            <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>
-
-            <div
-              class="systems-table settings-data-table settings-paginated-table settings-classification-table settings-system-catalog-table"
-              :class="{ 'is-empty-loading': isSystemCatalogLoading && currentSettingsSystemCatalogRows().length === 0 }"
-            >
-              <Transition name="table-filter-loading">
-                <div
-                  v-if="isSystemCatalogLoading"
-                  class="systems-table__filter-loading"
-                  :class="{ 'systems-table__filter-loading--initial': currentSettingsSystemCatalogRows().length === 0 }"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span>
-                    <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
-                    Загружаем таблицу 2…
-                  </span>
-                </div>
-              </Transition>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Шифр</th>
-                    <th>Система</th>
-                    <th>Класс</th>
-                    <th>
-                      <span class="settings-class-header settings-curator-header">
-                        <span>Куратор</span>
-                        <button
-                          type="button"
-                          :class="{ 'is-unlocked': isSettingsSystemCatalogUnlocked }"
-                          :aria-label="isSettingsSystemCatalogUnlocked ? 'Заблокировать редактирование' : 'Разрешить редактирование'"
-                          :title="isSettingsSystemCatalogUnlocked ? 'Редактирование разрешено' : 'Редактирование заблокировано'"
-                          @click="isSettingsSystemCatalogUnlocked = !isSettingsSystemCatalogUnlocked"
-                        >
-                          <Unlock v-if="isSettingsSystemCatalogUnlocked" :size="16" :stroke-width="2" aria-hidden="true" />
-                          <Lock v-else :size="16" :stroke-width="2" aria-hidden="true" />
-                        </button>
-                      </span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-if="!isSystemCatalogLoading && currentSettingsSystemCatalogRows().length === 0">
-                    <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 2</td>
-                  </tr>
-                  <tr v-for="row in visibleSettingsSystemCatalogRows()" :key="`settings-system-${row.id}`">
-                    <td>
-                      <input
-                        v-model="row.code"
-                        class="settings-cell-input"
-                        type="text"
-                        :disabled="!isSettingsSystemCatalogUnlocked"
-                        aria-label="Шифр системы"
-                        @input="scheduleSystemCatalogRowSave(row)"
-                        @blur="saveSystemCatalogRow(row)"
-                      />
-                    </td>
-                    <td>
-                      <input
-                        v-model="row.systemName"
-                        class="settings-cell-input"
-                        type="text"
-                        :disabled="!isSettingsSystemCatalogUnlocked"
-                        aria-label="Название системы"
-                        @input="scheduleSystemCatalogRowSave(row)"
-                        @blur="saveSystemCatalogRow(row)"
-                      />
-                    </td>
-                    <td :class="`status-cell status-cell--${classModifier(row.systemClass)}`">
-                      <select v-model="row.systemClass" :disabled="!isSettingsSystemCatalogUnlocked" :class="`settings-cell-select settings-cell-select--${classModifier(row.systemClass) || 'new'}`" aria-label="Класс системы" @change="saveSystemCatalogRow(row)">
-                        <option v-for="option in classOptions" :key="`catalog-${option}`" :value="option">{{ option }}</option>
-                      </select>
-                    </td>
-                    <td>
-                      <input
-                        v-model="row.curator"
-                        class="settings-cell-input"
-                        type="text"
-                        :disabled="!isSettingsSystemCatalogUnlocked"
-                        aria-label="Куратор"
-                        @input="scheduleSystemCatalogRowSave(row)"
-                        @blur="saveSystemCatalogRow(row)"
-                      />
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <footer v-if="!isSystemCatalogLoading && currentSettingsSystemCatalogRows().length > 0" class="table-pagination settings-table-pagination">
-              <span class="table-pagination__range">
-                Показано {{ settingsSystemCatalogRangeStart() }}–{{ settingsSystemCatalogRangeEnd() }} из {{ currentSettingsSystemCatalogRows().length }}
-              </span>
-              <div class="table-pagination__controls">
-                <label>
-                  <span>Записей на странице</span>
-                  <select v-model="settingsSystemCatalogPageSize" @change="changeSettingsSystemCatalogPageSize">
-                    <option value="10">10</option>
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="all">Все</option>
-                  </select>
-                </label>
-                <div v-if="settingsSystemCatalogPageSize !== 'all'" class="table-pagination__pages">
-                  <button type="button" :disabled="settingsSystemCatalogPage === 1" aria-label="Предыдущая страница" @click="changeSettingsSystemCatalogPage(settingsSystemCatalogPage - 1)">‹</button>
-                  <strong>{{ settingsSystemCatalogPage }} / {{ settingsSystemCatalogPageCount() }}</strong>
-                  <button type="button" :disabled="settingsSystemCatalogPage >= settingsSystemCatalogPageCount()" aria-label="Следующая страница" @click="changeSettingsSystemCatalogPage(settingsSystemCatalogPage + 1)">›</button>
-                </div>
-              </div>
-            </footer>
-          </section>
-
-          <section class="settings-table-block settings-table-block--documents settings-documents-block" aria-label="Таблица 3">
-            <div class="settings-table-toolbar">
-              <span class="settings-table-title">
-                <strong>Таблица 3</strong>
-                <small>Комментарии и документы по системам</small>
-              </span>
-              <label class="settings-search">
-                <input v-model="documentSearch" type="search" placeholder="Поиск по названию или шифру" @input="settingsDocumentsPage = 1" />
-              </label>
-            </div>
-
-            <p class="settings-table-note">
-              <Info :size="17" :stroke-width="1.8" aria-hidden="true" />
-              Комментарии сохраняются автоматически. К каждой системе можно прикрепить один файл PDF, DOC или DOCX размером до 25 МБ.
-            </p>
-
-            <p v-if="documentError" class="table-message table-message--error">{{ documentError }}</p>
-
-            <div
-              class="systems-table settings-docs-table settings-paginated-table"
-              :class="{ 'is-empty-loading': isDocumentTableLoading && filteredDocumentRows.length === 0 }"
-            >
-              <Transition name="table-filter-loading">
-                <div
-                  v-if="isDocumentTableLoading"
-                  class="systems-table__filter-loading"
-                  :class="{ 'systems-table__filter-loading--initial': filteredDocumentRows.length === 0 }"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span>
-                    <RefreshCw :size="18" :stroke-width="1.8" aria-hidden="true" />
-                    Загружаем таблицу 3…
-                  </span>
-                </div>
-              </Transition>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Название системы</th>
-                    <th>Комментарий</th>
-                    <th>Документ</th>
-                    <th>Действия</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-if="!isDocumentTableLoading && filteredDocumentRows.length === 0">
-                    <td class="empty-table-cell" colspan="4">В этом распоряжении пока нет данных таблицы 3</td>
-                  </tr>
-                  <tr v-for="row in visibleDocumentRows" :key="`document-${row.id}`">
-                    <td class="settings-docs-system-cell">
-                      <div class="settings-docs-system">
-                        <span class="settings-docs-system__icon" aria-hidden="true">
-                          <Layers3 :size="19" :stroke-width="1.8" />
-                        </span>
-                        <span class="settings-docs-system__identity">
-                          <strong :title="row.systemName">{{ row.systemName }}</strong>
-                          <small class="settings-docs-table__code" :class="{ 'is-empty': !row.code.trim() }">
-                            {{ row.code.trim() || 'Шифр не присвоен' }}
-                          </small>
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <textarea
-                        :id="`document-comment-${row.id}`"
-                        v-model="row.comment"
-                        class="document-comment-input"
-                        rows="2"
-                        placeholder="Добавьте комментарий…"
-                        :aria-label="`Комментарий к ${row.systemName}`"
-                        @input="scheduleDocumentCommentSave(row)"
-                        @blur="saveDocumentComment(row)"
-                      />
-                    </td>
-                    <td>
-                      <a
-                        v-if="row.attachmentName"
-                        class="settings-document-link"
-                        :href="systemDocumentAttachmentUrl(row)"
-                        target="_blank"
-                        rel="noreferrer"
-                        :title="`Открыть ${row.attachmentName}`"
-                      >
-                        <img :src="attachmentFileIcon(row.attachmentName)" alt="" aria-hidden="true" />
-                        <span>
-                          <strong>{{ row.attachmentName }}</strong>
-                          <small>{{ formatFileSize(row.attachmentSize) }}</small>
-                        </span>
-                      </a>
-                      <span v-else class="document-empty-cell">
-                        <img :src="genericFileIcon" alt="" aria-hidden="true" />
-                        <span>Файл не прикреплён</span>
-                      </span>
-                    </td>
-                    <td>
-                      <div class="document-actions">
-                        <input
-                          :id="`document-attachment-${row.id}`"
-                          class="visually-hidden-input"
-                          type="file"
-                          accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                          @change="uploadSystemDocumentAttachment(row, $event)"
-                        />
-                        <button
-                          class="document-upload-button"
-                          type="button"
-                          :disabled="attachmentPendingIds.includes(row.id)"
-                          :aria-label="row.attachmentName ? 'Изменить документ' : 'Загрузить документ'"
-                          @click="openAttachmentPicker(row)"
-                        >
-                          <RefreshCw v-if="row.attachmentName" :size="16" :stroke-width="1.8" aria-hidden="true" />
-                          <CloudUpload v-else :size="16" :stroke-width="1.8" aria-hidden="true" />
-                          {{ row.attachmentName ? 'Заменить' : 'Прикрепить' }}
-                        </button>
-                        <button
-                          class="icon-action-button icon-action-button--danger"
-                          type="button"
-                          :disabled="!row.attachmentName || attachmentPendingIds.includes(row.id)"
-                          :aria-label="row.attachmentName ? `Удалить документ ${row.attachmentName}` : 'Документ не загружен'"
-                          @click="deleteSystemDocumentAttachment(row)"
-                        >
-                          <Trash2 :size="17" :stroke-width="1.8" aria-hidden="true" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <footer v-if="!isDocumentTableLoading && filteredDocumentRows.length > 0" class="table-pagination settings-table-pagination">
-              <span>Показано {{ settingsDocumentsRangeStart() }}–{{ settingsDocumentsRangeEnd() }} из {{ filteredDocumentRows.length }}</span>
-              <div class="table-pagination__controls">
-                <label>
-                  Записей на странице
-                  <select v-model="settingsDocumentsPageSize" @change="changeSettingsDocumentsPageSize">
-                    <option value="10">10</option>
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="all">Все</option>
-                  </select>
-                </label>
-                <div v-if="settingsDocumentsPageSize !== 'all'" class="table-pagination__pages">
-                  <button type="button" :disabled="settingsDocumentsPage === 1" aria-label="Предыдущая страница" @click="changeSettingsDocumentsPage(settingsDocumentsPage - 1)">‹</button>
-                  <strong>{{ settingsDocumentsPage }} / {{ settingsDocumentsPageCount() }}</strong>
-                  <button type="button" :disabled="settingsDocumentsPage >= settingsDocumentsPageCount()" aria-label="Следующая страница" @click="changeSettingsDocumentsPage(settingsDocumentsPage + 1)">›</button>
-                </div>
-              </div>
-            </footer>
-          </section>
-        </section>
-      </section>
-
+      <ChangesPage v-if="activePage === 'changes'" :model="changesPageModel" />
+      <SystemsPage v-else-if="activePage === 'systems'" :model="systemsPageModel" />
+      <ClassificationPage v-else-if="activePage === 'classification'" :model="classificationPageModel" />
+      <ComparisonPage v-else-if="activePage === 'comparison'" :model="comparisonPageModel" />
+      <SettingsPage v-else-if="activePage === 'settings'" :model="settingsPageModel" />
       <section v-else class="placeholder-page">
         <h1>{{ pageTitle() }}</h1>
       </section>
+
+      <ClassLegendFooter
+        v-if="activePage !== 'settings'"
+        :include-forbidden="activePage !== 'changes'"
+      />
     </main>
 
     <Transition name="scroll-top">
@@ -4819,107 +2777,16 @@ onBeforeUnmount(() => {
       </button>
     </Transition>
 
-    <Teleport to="body">
-      <Transition name="modal-fade">
-        <div v-if="selectedHistorySystem" class="modal-overlay" @click="closeSystemHistory">
-          <section class="system-history-card" aria-label="История изменений системы" @click.stop>
-            <button class="modal-close-button" type="button" aria-label="Закрыть" @click="closeSystemHistory">
-              <X :size="27" :stroke-width="2" aria-hidden="true" />
-            </button>
-
-            <header class="system-history-header">
-              <span class="system-history-header__icon" aria-hidden="true">
-                <House :size="31" :stroke-width="1.8" />
-              </span>
-              <div class="system-history-header__content">
-                <div class="system-history-header__title">
-                  <h2>{{ selectedHistorySystem.systemName }}</h2>
-                  <a class="system-history-source" :href="selectedHistorySystem.systemUrl || 'https://nav.tn.ru/systems/'" target="_blank" rel="noreferrer" aria-label="Открыть на nav.tn.ru">
-                    <Globe2 :size="19" :stroke-width="2" aria-hidden="true" />
-                  </a>
-                </div>
-                <p>История изменений распоряжений и связанных документов</p>
-              </div>
-            </header>
-
-            <div v-if="isSystemHistoryLoading" class="system-history-loading">
-              <RefreshCw :size="20" :stroke-width="1.8" aria-hidden="true" />
-              Загрузка истории…
-            </div>
-            <p v-else-if="systemHistoryError" class="table-message table-message--error">{{ systemHistoryError }}</p>
-
-            <template v-else-if="systemHistoryRows.length">
-              <section class="history-current-section">
-                <div class="history-columns" aria-hidden="true">
-                  <span>Распоряжение</span>
-                  <span>Комментарий</span>
-                  <span>Документ</span>
-                </div>
-
-                <article v-for="row in systemHistoryRows.slice(0, 1)" :key="`history-current-${row.id}`" class="history-entry history-entry--current">
-                  <div class="history-entry__order">
-                    <strong>{{ row.orderName }}</strong>
-                  </div>
-                  <p :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</p>
-                  <a v-if="row.attachmentName" class="history-document" :href="systemDocumentAttachmentUrl(row)" target="_blank" rel="noreferrer">
-                    <span class="history-document__type-icon" :class="`history-document__type-icon--${attachmentFileKind(row.attachmentName)}`" aria-hidden="true">
-                      <img :src="attachmentFileIcon(row.attachmentName)" alt="" />
-                    </span>
-                    <span>{{ row.attachmentName }}</span>
-                    <ExternalLink :size="17" :stroke-width="1.8" aria-hidden="true" />
-                  </a>
-                  <span v-else class="history-document history-document--empty">
-                    <span class="history-document__empty-icon" aria-hidden="true"><img :src="genericFileIcon" alt="" /></span>
-                    <span>Документ не прикреплён</span>
-                  </span>
-                </article>
-              </section>
-
-              <button v-if="systemHistoryRows.length > 1" class="history-toggle" type="button" @click="isHistoryOpen = !isHistoryOpen">
-                <span class="history-toggle__line" aria-hidden="true" />
-                <ChevronUp :class="{ 'is-collapsed': !isHistoryOpen }" :size="20" :stroke-width="2" aria-hidden="true" />
-                {{ isHistoryOpen ? 'Скрыть историю изменений' : 'Показать историю изменений' }}
-                <span class="history-toggle__line" aria-hidden="true" />
-              </button>
-
-              <Transition name="history-more">
-                <section v-if="isHistoryOpen && systemHistoryRows.length > 1" class="history-archive">
-                  <header>
-                    <span aria-hidden="true"><Clock3 :size="18" :stroke-width="1.8" /></span>
-                    <strong>История изменений</strong>
-                  </header>
-                  <div class="history-timeline">
-                    <article v-for="row in systemHistoryRows.slice(1)" :key="`history-${row.id}`" class="history-entry history-entry--past">
-                      <div class="history-entry__order">
-                        <strong>{{ row.orderName }}</strong>
-                      </div>
-                      <p :class="{ 'history-comment--empty': !row.comment }">{{ row.comment || 'Комментарий не добавлен' }}</p>
-                      <a v-if="row.attachmentName" class="history-document" :href="systemDocumentAttachmentUrl(row)" target="_blank" rel="noreferrer">
-                        <span class="history-document__type-icon" :class="`history-document__type-icon--${attachmentFileKind(row.attachmentName)}`" aria-hidden="true">
-                          <img :src="attachmentFileIcon(row.attachmentName)" alt="" />
-                        </span>
-                        <span>{{ row.attachmentName }}</span>
-                        <ExternalLink :size="17" :stroke-width="1.8" aria-hidden="true" />
-                      </a>
-                      <span v-else class="history-document history-document--empty">
-                        <span class="history-document__empty-icon" aria-hidden="true"><img :src="genericFileIcon" alt="" /></span>
-                        <span>Документ не прикреплён</span>
-                      </span>
-                    </article>
-                  </div>
-                </section>
-              </Transition>
-
-              <footer class="system-history-footer">
-                <Info :size="17" :stroke-width="1.8" aria-hidden="true" />
-                Самые новые изменения отображаются первыми.
-              </footer>
-            </template>
-
-            <p v-else class="system-history-empty">История изменений пока отсутствует</p>
-          </section>
-        </div>
-      </Transition>
-    </Teleport>
+    <SystemHistoryModal
+      :system="selectedHistorySystem"
+      :rows="systemHistoryRows"
+      :is-loading="isSystemHistoryLoading"
+      :error="systemHistoryError"
+      v-model:is-history-open="isHistoryOpen"
+      :attachment-file-kind="attachmentFileKind"
+      :attachment-file-icon="attachmentFileIcon"
+      :attachment-u-r-l="systemDocumentAttachmentUrl"
+      @close="closeSystemHistory"
+    />
   </div>
 </template>

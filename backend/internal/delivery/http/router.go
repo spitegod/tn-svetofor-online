@@ -2,10 +2,13 @@ package http
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"path"
@@ -13,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"tn/backend/internal/apperror"
 	"tn/backend/internal/model"
 	"tn/backend/internal/service"
 )
@@ -23,13 +27,25 @@ type Router struct {
 	systemDocuments *service.SystemDocumentService
 	orders          *service.OrderService
 	navParser       *service.NavParserService
+	healthChecker   healthChecker
 }
 
-func NewRouter(classification *service.ClassificationService, systemCatalog *service.SystemCatalogService, systemDocuments *service.SystemDocumentService, orders *service.OrderService, navParser *service.NavParserService) http.Handler {
-	router := &Router{classification: classification, systemCatalog: systemCatalog, systemDocuments: systemDocuments, orders: orders, navParser: navParser}
+type healthChecker interface {
+	PingContext(context.Context) error
+}
+
+const (
+	maxJSONBodySize       = 4 << 20
+	maxTableUploadSize    = 32 << 20
+	maxWorkbookUploadSize = 64 << 20
+	maxFilterValueBytes   = 500
+)
+
+func NewRouter(classification *service.ClassificationService, systemCatalog *service.SystemCatalogService, systemDocuments *service.SystemDocumentService, orders *service.OrderService, navParser *service.NavParserService, healthChecker healthChecker) http.Handler {
+	router := &Router{classification: classification, systemCatalog: systemCatalog, systemDocuments: systemDocuments, orders: orders, navParser: navParser, healthChecker: healthChecker}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/health", health)
+	mux.HandleFunc("GET /api/health", router.health)
 	mux.HandleFunc("GET /api/orders", router.listOrders)
 	mux.HandleFunc("POST /api/orders", router.createOrder)
 	mux.HandleFunc("POST /api/orders/import", router.importOrderWorkbook)
@@ -44,6 +60,7 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("POST /api/system-catalog/import", router.importSystemCatalog)
 	mux.HandleFunc("GET /api/system-catalog/export", router.exportSystemCatalog)
 	mux.HandleFunc("POST /api/system-catalog/parse-nav", router.parseNavSystemCatalog)
+	mux.HandleFunc("POST /api/nav-parser/runs", router.parseNavSystemCatalog)
 	mux.HandleFunc("POST /api/nav-parser/cancel", router.cancelNavParser)
 	mux.HandleFunc("GET /api/nav-parser/status", router.navParserStatus)
 	mux.HandleFunc("GET /api/nav-parser/runs", router.navParserRuns)
@@ -60,21 +77,86 @@ func NewRouter(classification *service.ClassificationService, systemCatalog *ser
 	mux.HandleFunc("PATCH /api/system-documents/{id}/comparison", router.updateSystemDocumentComparison)
 	mux.HandleFunc("PATCH /api/system-documents/comparison", router.updateSystemDocumentComparisonBulk)
 	mux.HandleFunc("POST /api/comparison/export", router.exportComparison)
-	mux.HandleFunc("DELETE /api/system-documents/{id}", router.deleteSystemDocument)
 
-	return mux
+	return requestLoggingMiddleware(recoverMiddleware(securityHeadersMiddleware(mux)))
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	if r.status != 0 {
+		return
+	}
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *statusRecorder) Write(payload []byte) (int, error) {
+	if r.status == 0 {
+		r.WriteHeader(http.StatusOK)
+	}
+	return r.ResponseWriter.Write(payload)
+}
+
+func requestLoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		startedAt := time.Now()
+		requestID := newRequestID()
+		w.Header().Set("X-Request-ID", requestID)
+		recorder := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, request)
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		log.Printf("request_id=%s method=%s path=%s status=%d duration=%s", requestID,
+			request.Method, request.URL.Path, status, time.Since(startedAt).Round(time.Millisecond))
+	})
+}
+
+func newRequestID() string {
+	var value [12]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(value[:])
+}
+
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, request)
+	})
+}
+
+func recoverMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				log.Printf("panic while serving %s %s: %v", request.Method, request.URL.Path, recovered)
+				writeError(w, http.StatusInternalServerError, fmt.Errorf("internal server error"))
+			}
+		}()
+		next.ServeHTTP(w, request)
+	})
 }
 
 func (r *Router) exportComparison(w http.ResponseWriter, request *http.Request) {
 	var payload model.ComparisonExport
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode comparison export: %w", err))
 		return
 	}
 
-	data, err := r.systemDocuments.ExportComparison(payload)
+	data, err := r.systemDocuments.ExportComparison(request.Context(), payload)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -85,18 +167,26 @@ func (r *Router) exportComparison(w http.ResponseWriter, request *http.Request) 
 }
 
 func (r *Router) listSystemDocuments(w http.ResponseWriter, request *http.Request) {
-	payload, err := r.systemDocuments.List(request.Context(), systemDocumentFilterFromRequest(request))
+	filter, ok := systemDocumentFilterFromRequest(w, request)
+	if !ok {
+		return
+	}
+	payload, err := r.systemDocuments.List(request.Context(), filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeActionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
 }
 
 func (r *Router) exportSystemDocuments(w http.ResponseWriter, request *http.Request) {
-	payload, err := r.systemDocuments.Export(request.Context(), systemDocumentFilterFromRequest(request))
+	filter, ok := systemDocumentFilterFromRequest(w, request)
+	if !ok {
+		return
+	}
+	payload, err := r.systemDocuments.Export(request.Context(), filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeActionError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -108,7 +198,7 @@ func (r *Router) exportSystemDocuments(w http.ResponseWriter, request *http.Requ
 func (r *Router) systemDocumentHistory(w http.ResponseWriter, request *http.Request) {
 	payload, err := r.systemDocuments.History(request.Context(), request.URL.Query().Get("code"), request.URL.Query().Get("systemName"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, payload)
@@ -123,13 +213,17 @@ func (r *Router) updateSystemDocument(w http.ResponseWriter, request *http.Reque
 	var payload struct {
 		Comment string `json:"comment"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode system document: %w", err))
 		return
 	}
-	row, err := r.systemDocuments.UpdateComment(request.Context(), id, orderIDFromRequest(request), payload.Comment)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	row, err := r.systemDocuments.UpdateComment(request.Context(), id, orderID, payload.Comment)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
@@ -169,8 +263,12 @@ func (r *Router) uploadSystemDocumentAttachment(w http.ResponseWriter, request *
 		ContentType: contentType,
 		Data:        data,
 	}
-	if err := r.systemDocuments.SaveAttachment(request.Context(), id, orderIDFromRequest(request), attachment); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	if err := r.systemDocuments.SaveAttachment(request.Context(), id, orderID, attachment); err != nil {
+		writeActionError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -182,13 +280,17 @@ func (r *Router) getSystemDocumentAttachment(w http.ResponseWriter, request *htt
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
 		return
 	}
-	attachment, err := r.systemDocuments.Attachment(request.Context(), id, orderIDFromRequest(request))
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	attachment, err := r.systemDocuments.Attachment(request.Context(), id, orderID)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err)
+		writeActionError(w, err)
 		return
 	}
 	disposition := "attachment"
-	if attachment.ContentType == "application/pdf" || attachment.ContentType == "text/plain" || strings.HasPrefix(attachment.ContentType, "image/") {
+	if attachment.ContentType == "application/pdf" {
 		disposition = "inline"
 	}
 	w.Header().Set("Content-Type", attachment.ContentType)
@@ -205,21 +307,12 @@ func (r *Router) deleteSystemDocumentAttachment(w http.ResponseWriter, request *
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
 		return
 	}
-	if err := r.systemDocuments.DeleteAttachment(request.Context(), id, orderIDFromRequest(request)); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (r *Router) deleteSystemDocument(w http.ResponseWriter, request *http.Request) {
-	id, err := strconv.ParseInt(request.PathValue("id"), 10, 64)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid system document id: %w", err))
-		return
-	}
-	if err := r.systemDocuments.Delete(request.Context(), id, orderIDFromRequest(request)); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	if err := r.systemDocuments.DeleteAttachment(request.Context(), id, orderID); err != nil {
+		writeActionError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -234,12 +327,16 @@ func (r *Router) updateSystemDocumentComparison(w http.ResponseWriter, request *
 	var payload struct {
 		Selected bool `json:"selected"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode comparison selection: %w", err))
 		return
 	}
-	if err := r.systemDocuments.UpdateComparison(request.Context(), id, orderIDFromRequest(request), payload.Selected); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	if err := r.systemDocuments.UpdateComparison(request.Context(), id, orderID, payload.Selected); err != nil {
+		writeActionError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -251,33 +348,31 @@ func (r *Router) updateSystemDocumentComparisonBulk(w http.ResponseWriter, reque
 		AllOrders bool                      `json:"allOrders"`
 		Systems   []model.SystemDocumentKey `json:"systems"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode bulk comparison selection: %w", err))
 		return
 	}
-	if err := r.systemDocuments.UpdateComparisonBulk(request.Context(), orderIDFromRequest(request), payload.AllOrders, payload.Selected, payload.Systems); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	if err := r.systemDocuments.UpdateComparisonBulk(request.Context(), orderID, payload.AllOrders, payload.Selected, payload.Systems); err != nil {
+		writeActionError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (r *Router) parseNavSystemCatalog(w http.ResponseWriter, request *http.Request) {
-	report, err := r.navParser.Parse(request.Context())
-	if err != nil {
+	if err := r.navParser.StartManual(); err != nil {
 		if errors.Is(err, service.ErrNavParserRunning) {
 			writeError(w, http.StatusConflict, err)
 			return
 		}
-		if errors.Is(err, context.Canceled) {
-			writeError(w, http.StatusConflict, fmt.Errorf("NAV parser was canceled"))
-			return
-		}
-		writeError(w, http.StatusBadGateway, err)
+		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-
-	writeJSON(w, http.StatusOK, report)
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "started"})
 }
 
 func (r *Router) cancelNavParser(w http.ResponseWriter, _ *http.Request) {
@@ -317,7 +412,7 @@ func (r *Router) navParserRuns(w http.ResponseWriter, request *http.Request) {
 func (r *Router) navSystemTypeImage(w http.ResponseWriter, request *http.Request) {
 	image, err := r.navParser.SystemTypeImage(request.Context(), request.PathValue("slug"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, err)
+		writeActionError(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", image.ContentType)
@@ -339,19 +434,28 @@ func (r *Router) navParserSettings(w http.ResponseWriter, request *http.Request)
 
 func (r *Router) updateNavParserSettings(w http.ResponseWriter, request *http.Request) {
 	var payload model.NavParserSettings
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid nav parser settings"))
 		return
 	}
 	settings, err := r.navParser.UpdateSettings(request.Context(), payload)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, settings)
 }
 
-func health(w http.ResponseWriter, r *http.Request) {
+func (r *Router) health(w http.ResponseWriter, request *http.Request) {
+	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+	defer cancel()
+	if err := r.healthChecker.PingContext(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status": "unavailable",
+			"error":  "database is unavailable",
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 		"time":   time.Now().UTC().Format(time.RFC3339),
@@ -372,14 +476,14 @@ func (r *Router) createOrder(w http.ResponseWriter, request *http.Request) {
 	var payload struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode order: %w", err))
 		return
 	}
 
 	order, err := r.orders.Create(request.Context(), payload.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -387,9 +491,13 @@ func (r *Router) createOrder(w http.ResponseWriter, request *http.Request) {
 }
 
 func (r *Router) importOrderWorkbook(w http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(w, request.Body, maxWorkbookUploadSize)
 	if err := request.ParseMultipartForm(32 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("parse multipart form: %w", err))
 		return
+	}
+	if request.MultipartForm != nil {
+		defer request.MultipartForm.RemoveAll()
 	}
 
 	file, header, err := request.FormFile("file")
@@ -408,7 +516,7 @@ func (r *Router) importOrderWorkbook(w http.ResponseWriter, request *http.Reques
 
 	order, err := r.orders.ImportWorkbook(request.Context(), orderName, file)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -425,14 +533,14 @@ func (r *Router) updateOrder(w http.ResponseWriter, request *http.Request) {
 	var payload struct {
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode order: %w", err))
 		return
 	}
 
 	order, err := r.orders.UpdateName(request.Context(), id, payload.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -447,7 +555,7 @@ func (r *Router) deleteOrder(w http.ResponseWriter, request *http.Request) {
 	}
 
 	if err := r.orders.Delete(request.Context(), id); err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -455,9 +563,13 @@ func (r *Router) deleteOrder(w http.ResponseWriter, request *http.Request) {
 }
 
 func (r *Router) listClassificationChanges(w http.ResponseWriter, request *http.Request) {
-	payload, err := r.classification.List(request.Context(), classificationFilterFromRequest(request))
+	filter, ok := classificationFilterFromRequest(w, request)
+	if !ok {
+		return
+	}
+	payload, err := r.classification.List(request.Context(), filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -471,22 +583,30 @@ func (r *Router) updateClassificationChange(w http.ResponseWriter, request *http
 		return
 	}
 	var payload model.ClassificationChange
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode classification change: %w", err))
 		return
 	}
-	row, err := r.classification.Update(request.Context(), id, orderIDFromRequest(request), payload)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	row, err := r.classification.Update(request.Context(), id, orderID, payload)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
 }
 
 func (r *Router) importClassificationChanges(w http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(w, request.Body, maxTableUploadSize)
 	if err := request.ParseMultipartForm(32 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("parse multipart form: %w", err))
 		return
+	}
+	if request.MultipartForm != nil {
+		defer request.MultipartForm.RemoveAll()
 	}
 
 	file, _, err := request.FormFile("file")
@@ -496,9 +616,13 @@ func (r *Router) importClassificationChanges(w http.ResponseWriter, request *htt
 	}
 	defer file.Close()
 
-	payload, err := r.classification.Import(request.Context(), orderIDFromRequest(request), file)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	payload, err := r.classification.Import(request.Context(), orderID, file)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -506,9 +630,13 @@ func (r *Router) importClassificationChanges(w http.ResponseWriter, request *htt
 }
 
 func (r *Router) exportClassificationChanges(w http.ResponseWriter, request *http.Request) {
-	payload, err := r.classification.Export(request.Context(), classificationFilterFromRequest(request))
+	filter, ok := classificationFilterFromRequest(w, request)
+	if !ok {
+		return
+	}
+	payload, err := r.classification.Export(request.Context(), filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -519,9 +647,13 @@ func (r *Router) exportClassificationChanges(w http.ResponseWriter, request *htt
 }
 
 func (r *Router) listSystemCatalog(w http.ResponseWriter, request *http.Request) {
-	payload, err := r.systemCatalog.List(request.Context(), systemCatalogFilterFromRequest(request))
+	filter, ok := systemCatalogFilterFromRequest(w, request)
+	if !ok {
+		return
+	}
+	payload, err := r.systemCatalog.List(request.Context(), filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -535,22 +667,30 @@ func (r *Router) updateSystemCatalogRow(w http.ResponseWriter, request *http.Req
 		return
 	}
 	var payload model.SystemCatalogRow
-	if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+	if err := decodeJSON(w, request, &payload); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("decode system catalog row: %w", err))
 		return
 	}
-	row, err := r.systemCatalog.Update(request.Context(), id, orderIDFromRequest(request), payload)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	row, err := r.systemCatalog.Update(request.Context(), id, orderID, payload)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
 }
 
 func (r *Router) importSystemCatalog(w http.ResponseWriter, request *http.Request) {
+	request.Body = http.MaxBytesReader(w, request.Body, maxTableUploadSize)
 	if err := request.ParseMultipartForm(32 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("parse multipart form: %w", err))
 		return
+	}
+	if request.MultipartForm != nil {
+		defer request.MultipartForm.RemoveAll()
 	}
 
 	file, _, err := request.FormFile("file")
@@ -560,9 +700,13 @@ func (r *Router) importSystemCatalog(w http.ResponseWriter, request *http.Reques
 	}
 	defer file.Close()
 
-	payload, err := r.systemCatalog.Import(request.Context(), orderIDFromRequest(request), file)
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return
+	}
+	payload, err := r.systemCatalog.Import(request.Context(), orderID, file)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -570,9 +714,13 @@ func (r *Router) importSystemCatalog(w http.ResponseWriter, request *http.Reques
 }
 
 func (r *Router) exportSystemCatalog(w http.ResponseWriter, request *http.Request) {
-	payload, err := r.systemCatalog.Export(request.Context(), systemCatalogFilterFromRequest(request))
+	filter, ok := systemCatalogFilterFromRequest(w, request)
+	if !ok {
+		return
+	}
+	payload, err := r.systemCatalog.Export(request.Context(), filter)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeActionError(w, err)
 		return
 	}
 
@@ -582,10 +730,14 @@ func (r *Router) exportSystemCatalog(w http.ResponseWriter, request *http.Reques
 	_, _ = w.Write(payload)
 }
 
-func classificationFilterFromRequest(request *http.Request) model.ClassificationFilter {
+func classificationFilterFromRequest(w http.ResponseWriter, request *http.Request) (model.ClassificationFilter, bool) {
 	query := request.URL.Query()
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return model.ClassificationFilter{}, false
+	}
 	filter := model.ClassificationFilter{
-		OrderID:          orderIDFromRequest(request),
+		OrderID:          orderID,
 		Query:            query.Get("q"),
 		ConstructionType: query.Get("constructionType"),
 		ClassBefore:      query.Get("before"),
@@ -601,14 +753,21 @@ func classificationFilterFromRequest(request *http.Request) model.Classification
 	if filter.ConstructionType == "Все" {
 		filter.ConstructionType = ""
 	}
+	if !validateFilterValues(w, filter.Query, filter.ConstructionType, filter.ClassBefore, filter.ClassAfter) {
+		return model.ClassificationFilter{}, false
+	}
 
-	return filter
+	return filter, true
 }
 
-func systemCatalogFilterFromRequest(request *http.Request) model.SystemCatalogFilter {
+func systemCatalogFilterFromRequest(w http.ResponseWriter, request *http.Request) (model.SystemCatalogFilter, bool) {
 	query := request.URL.Query()
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return model.SystemCatalogFilter{}, false
+	}
 	filter := model.SystemCatalogFilter{
-		OrderID:     orderIDFromRequest(request),
+		OrderID:     orderID,
 		Query:       query.Get("q"),
 		SystemClass: query.Get("class"),
 		Curator:     query.Get("curator"),
@@ -620,14 +779,21 @@ func systemCatalogFilterFromRequest(request *http.Request) model.SystemCatalogFi
 	if filter.Curator == "Все" || filter.Curator == "Все кураторы" {
 		filter.Curator = ""
 	}
+	if !validateFilterValues(w, filter.Query, filter.SystemClass, filter.Curator) {
+		return model.SystemCatalogFilter{}, false
+	}
 
-	return filter
+	return filter, true
 }
 
-func systemDocumentFilterFromRequest(request *http.Request) model.SystemDocumentFilter {
+func systemDocumentFilterFromRequest(w http.ResponseWriter, request *http.Request) (model.SystemDocumentFilter, bool) {
 	query := request.URL.Query()
+	orderID, ok := requireOrderID(w, request)
+	if !ok {
+		return model.SystemDocumentFilter{}, false
+	}
 	filter := model.SystemDocumentFilter{
-		OrderID:          orderIDFromRequest(request),
+		OrderID:          orderID,
 		Query:            query.Get("q"),
 		SystemClass:      query.Get("class"),
 		Curator:          query.Get("curator"),
@@ -641,24 +807,46 @@ func systemDocumentFilterFromRequest(request *http.Request) model.SystemDocument
 	if filter.Curator == "Все" || filter.Curator == "Все кураторы" {
 		filter.Curator = ""
 	}
-	return filter
+	if !validateFilterValues(w, filter.Query, filter.SystemClass, filter.Curator, filter.ConstructionType, filter.SystemType) {
+		return model.SystemDocumentFilter{}, false
+	}
+	return filter, true
 }
 
-func orderIDFromRequest(request *http.Request) int64 {
+func validateFilterValues(w http.ResponseWriter, values ...string) bool {
+	for _, value := range values {
+		if len(value) > maxFilterValueBytes {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf("filter value is too long"))
+			return false
+		}
+	}
+	return true
+}
+
+func requireOrderID(w http.ResponseWriter, request *http.Request) (int64, bool) {
+	id, err := orderIDFromRequest(request)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return 0, false
+	}
+	return id, true
+}
+
+func orderIDFromRequest(request *http.Request) (int64, error) {
 	value := request.URL.Query().Get("orderId")
 	if value == "" {
 		value = request.FormValue("orderId")
 	}
 	if value == "" {
-		return 1
+		return 1, nil
 	}
 
 	id, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return 1
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("orderId must be a positive integer")
 	}
 
-	return id
+	return id, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -667,8 +855,53 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+func decodeJSON(w http.ResponseWriter, request *http.Request, destination any) error {
+	request.Body = http.MaxBytesReader(w, request.Body, maxJSONBodySize)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
 func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]string{
-		"error": err.Error(),
-	})
+	message := err.Error()
+	code := "bad_request"
+	if status >= http.StatusInternalServerError {
+		log.Printf("HTTP %d: %v", status, err)
+		message = "Внутренняя ошибка сервера"
+		code = "internal_error"
+	} else {
+		switch status {
+		case http.StatusNotFound:
+			code = "not_found"
+		case http.StatusConflict:
+			code = "conflict"
+		case http.StatusUnprocessableEntity:
+			code = "validation_error"
+		}
+	}
+	writeJSON(w, status, map[string]string{"code": code, "error": message})
+}
+
+func writeActionError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	if kind, ok := apperror.KindOf(err); ok {
+		switch kind {
+		case apperror.Validation:
+			status = http.StatusUnprocessableEntity
+		case apperror.NotFound:
+			status = http.StatusNotFound
+		case apperror.Conflict:
+			status = http.StatusConflict
+		}
+	}
+	writeError(w, status, err)
 }

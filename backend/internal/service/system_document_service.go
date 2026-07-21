@@ -1,25 +1,44 @@
 package service
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 
+	"tn/backend/internal/apperror"
 	"tn/backend/internal/model"
-	"tn/backend/internal/repository"
 
 	"github.com/xuri/excelize/v2"
 )
 
 type SystemDocumentService struct {
-	repo *repository.SystemDocumentRepository
+	repo systemDocumentRepository
+}
+
+type systemDocumentRepository interface {
+	List(context.Context, model.SystemDocumentFilter) ([]model.SystemDocumentRow, error)
+	Stats(context.Context, int64) (model.SystemCatalogStats, error)
+	Options(context.Context, string, int64) ([]string, error)
+	History(context.Context, string, string) ([]model.SystemDocumentRow, error)
+	UpdateComment(context.Context, int64, int64, string) (model.SystemDocumentRow, error)
+	SaveAttachment(context.Context, int64, int64, model.SystemDocumentAttachment) error
+	Attachment(context.Context, int64, int64) (model.SystemDocumentAttachment, error)
+	DeleteAttachment(context.Context, int64, int64) error
+	UpdateComparison(context.Context, int64, int64, bool) error
+	UpdateComparisonBulk(context.Context, int64, bool, bool, []model.SystemDocumentKey) error
 }
 
 const MaxSystemDocumentAttachmentSize int64 = 25 << 20
 
+const maxSystemDocumentCommentBytes = 20_000
+
 func (s *SystemDocumentService) Export(ctx context.Context, filter model.SystemDocumentFilter) ([]byte, error) {
+	if err := validateSystemDocumentFilter(filter); err != nil {
+		return nil, err
+	}
 	rows, err := s.repo.List(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -65,6 +84,9 @@ func (s *SystemDocumentService) Export(ctx context.Context, filter model.SystemD
 	_ = file.SetRowHeight(sheet, 1, 24)
 
 	for index, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		excelRow := index + 2
 		values := []string{row.Code, row.SystemName, row.SystemClass, row.Curator, row.Comment, row.AttachmentName}
 		for column, value := range values {
@@ -99,9 +121,24 @@ func (s *SystemDocumentService) Export(ctx context.Context, filter model.SystemD
 	return buffer.Bytes(), nil
 }
 
-func (s *SystemDocumentService) ExportComparison(payload model.ComparisonExport) ([]byte, error) {
+func (s *SystemDocumentService) ExportComparison(ctx context.Context, payload model.ComparisonExport) ([]byte, error) {
 	if len(payload.Headers) < 2 {
-		return nil, fmt.Errorf("comparison export has no columns")
+		return nil, apperror.New(apperror.Validation, "comparison export has no columns")
+	}
+	if len(payload.Headers) > 20 || len(payload.Rows) > 50_000 {
+		return nil, apperror.New(apperror.Validation, "comparison export is too large")
+	}
+	for _, header := range payload.Headers {
+		if len(header) > maxImportedCellBytes {
+			return nil, apperror.New(apperror.Validation, "comparison header is too long")
+		}
+	}
+	for _, row := range payload.Rows {
+		for _, value := range row {
+			if len(value) > maxImportedCellBytes {
+				return nil, apperror.New(apperror.Validation, "comparison cell is too long")
+			}
+		}
 	}
 
 	file := excelize.NewFile()
@@ -141,10 +178,16 @@ func (s *SystemDocumentService) ExportComparison(payload model.ComparisonExport)
 	}
 
 	for column, value := range payload.Headers {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		cell, _ := excelize.CoordinatesToCellName(column+1, 1)
 		_ = file.SetCellValue(sheet, cell, value)
 	}
 	for rowIndex, row := range payload.Rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for column := range payload.Headers {
 			value := ""
 			if column < len(row) {
@@ -215,13 +258,16 @@ func hasSystemCharacteristic(row model.SystemDocumentRow, name string, value str
 	return false
 }
 
-func NewSystemDocumentService(repo *repository.SystemDocumentRepository) *SystemDocumentService {
+func NewSystemDocumentService(repo systemDocumentRepository) *SystemDocumentService {
 	return &SystemDocumentService{repo: repo}
 }
 
 func (s *SystemDocumentService) List(ctx context.Context, filter model.SystemDocumentFilter) (model.SystemDocumentList, error) {
 	if filter.OrderID <= 0 {
 		filter.OrderID = 1
+	}
+	if err := validateSystemDocumentFilter(filter); err != nil {
+		return model.SystemDocumentList{}, err
 	}
 	rows, err := s.repo.List(ctx, filter)
 	if err != nil {
@@ -242,73 +288,129 @@ func (s *SystemDocumentService) List(ctx context.Context, filter model.SystemDoc
 	return model.SystemDocumentList{Rows: rows, Stats: stats, ClassOptions: classOptions, CuratorOptions: curatorOptions}, nil
 }
 
+func validateSystemDocumentFilter(filter model.SystemDocumentFilter) error {
+	if filter.SystemClass != "" && !validStatus(filter.SystemClass, false) {
+		return apperror.New(apperror.Validation, "invalid system class filter")
+	}
+	if filter.ConstructionType != "" && !validConstructionType(filter.ConstructionType) {
+		return apperror.New(apperror.Validation, "invalid construction type filter")
+	}
+	return nil
+}
+
 func (s *SystemDocumentService) History(ctx context.Context, code string, systemName string) ([]model.SystemDocumentRow, error) {
-	if code == "" || systemName == "" {
-		return nil, fmt.Errorf("system code and name are required")
+	code = strings.TrimSpace(code)
+	systemName = strings.TrimSpace(systemName)
+	if code == "" && systemName == "" {
+		return nil, apperror.New(apperror.Validation, "system code or name is required")
+	}
+	if len(code) > maxImportedCellBytes || len(systemName) > maxImportedCellBytes {
+		return nil, apperror.New(apperror.Validation, "system code or name is too long")
 	}
 	return s.repo.History(ctx, code, systemName)
 }
 
 func (s *SystemDocumentService) UpdateComment(ctx context.Context, id int64, orderID int64, comment string) (model.SystemDocumentRow, error) {
 	if id <= 0 || orderID <= 0 {
-		return model.SystemDocumentRow{}, fmt.Errorf("invalid system document id or order id")
+		return model.SystemDocumentRow{}, apperror.New(apperror.Validation, "invalid system document id or order id")
+	}
+	if len(comment) > maxSystemDocumentCommentBytes {
+		return model.SystemDocumentRow{}, apperror.New(apperror.Validation, "comment exceeds %d bytes", maxSystemDocumentCommentBytes)
 	}
 	return s.repo.UpdateComment(ctx, id, orderID, comment)
 }
 
 func (s *SystemDocumentService) SaveAttachment(ctx context.Context, id int64, orderID int64, attachment model.SystemDocumentAttachment) error {
 	if id <= 0 || orderID <= 0 {
-		return fmt.Errorf("invalid system document id or order id")
+		return apperror.New(apperror.Validation, "invalid system document id or order id")
 	}
-	attachment.Name = filepath.Base(strings.TrimSpace(attachment.Name))
+	attachment.Name = filepath.Base(strings.ReplaceAll(strings.TrimSpace(attachment.Name), "\\", "/"))
 	attachment.Size = int64(len(attachment.Data))
 	if attachment.Name == "" || attachment.Name == "." || attachment.Size == 0 {
-		return fmt.Errorf("attachment file is empty")
+		return apperror.New(apperror.Validation, "attachment file is empty")
+	}
+	if len(attachment.Name) > 255 {
+		return apperror.New(apperror.Validation, "attachment file name is too long")
 	}
 	if attachment.Size > MaxSystemDocumentAttachmentSize {
-		return fmt.Errorf("attachment exceeds 25 MB")
+		return apperror.New(apperror.Validation, "attachment exceeds 25 MB")
 	}
 	extension := strings.ToLower(filepath.Ext(attachment.Name))
 	if extension != ".pdf" && extension != ".doc" && extension != ".docx" {
-		return fmt.Errorf("attachment must be PDF, DOC or DOCX")
+		return apperror.New(apperror.Validation, "attachment must be PDF, DOC or DOCX")
 	}
-	if attachment.ContentType == "" {
-		attachment.ContentType = "application/octet-stream"
+	contentType, err := validateSystemDocumentAttachment(extension, attachment.Data)
+	if err != nil {
+		return apperror.Wrap(apperror.Validation, err)
 	}
+	attachment.ContentType = contentType
 	return s.repo.SaveAttachment(ctx, id, orderID, attachment)
+}
+
+func validateSystemDocumentAttachment(extension string, data []byte) (string, error) {
+	switch extension {
+	case ".pdf":
+		if !bytes.HasPrefix(data, []byte("%PDF-")) {
+			return "", fmt.Errorf("attachment content does not match PDF format")
+		}
+		return "application/pdf", nil
+	case ".doc":
+		legacyWordSignature := []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1}
+		if !bytes.HasPrefix(data, legacyWordSignature) {
+			return "", fmt.Errorf("attachment content does not match DOC format")
+		}
+		return "application/msword", nil
+	case ".docx":
+		archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return "", fmt.Errorf("attachment content does not match DOCX format")
+		}
+		hasContentTypes := false
+		hasWordDocument := false
+		for _, file := range archive.File {
+			switch file.Name {
+			case "[Content_Types].xml":
+				hasContentTypes = true
+			case "word/document.xml":
+				hasWordDocument = true
+			}
+		}
+		if !hasContentTypes || !hasWordDocument {
+			return "", fmt.Errorf("attachment content does not match DOCX format")
+		}
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document", nil
+	default:
+		return "", fmt.Errorf("unsupported attachment format")
+	}
 }
 
 func (s *SystemDocumentService) Attachment(ctx context.Context, id int64, orderID int64) (model.SystemDocumentAttachment, error) {
 	if id <= 0 || orderID <= 0 {
-		return model.SystemDocumentAttachment{}, fmt.Errorf("invalid system document id or order id")
+		return model.SystemDocumentAttachment{}, apperror.New(apperror.Validation, "invalid system document id or order id")
 	}
 	return s.repo.Attachment(ctx, id, orderID)
 }
 
 func (s *SystemDocumentService) DeleteAttachment(ctx context.Context, id int64, orderID int64) error {
 	if id <= 0 || orderID <= 0 {
-		return fmt.Errorf("invalid system document id or order id")
+		return apperror.New(apperror.Validation, "invalid system document id or order id")
 	}
 	return s.repo.DeleteAttachment(ctx, id, orderID)
 }
 
-func (s *SystemDocumentService) Delete(ctx context.Context, id int64, orderID int64) error {
-	if id <= 0 || orderID <= 0 {
-		return fmt.Errorf("invalid system document id or order id")
-	}
-	return s.repo.Delete(ctx, id, orderID)
-}
-
 func (s *SystemDocumentService) UpdateComparison(ctx context.Context, id int64, orderID int64, selected bool) error {
 	if id <= 0 || orderID <= 0 {
-		return fmt.Errorf("invalid system document id or order id")
+		return apperror.New(apperror.Validation, "invalid system document id or order id")
 	}
 	return s.repo.UpdateComparison(ctx, id, orderID, selected)
 }
 
 func (s *SystemDocumentService) UpdateComparisonBulk(ctx context.Context, orderID int64, allOrders bool, selected bool, systems []model.SystemDocumentKey) error {
 	if orderID <= 0 {
-		return fmt.Errorf("invalid order id")
+		return apperror.New(apperror.Validation, "invalid order id")
+	}
+	if len(systems) > 5_000 {
+		return apperror.New(apperror.Validation, "too many systems in one comparison update")
 	}
 	return s.repo.UpdateComparisonBulk(ctx, orderID, allOrders, selected, systems)
 }
