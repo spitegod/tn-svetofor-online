@@ -9,6 +9,11 @@ import pngFileIcon from 'bootstrap-icons/icons/filetype-png.svg'
 import xlsFileIcon from 'bootstrap-icons/icons/filetype-xls.svg'
 import xlsxFileIcon from 'bootstrap-icons/icons/filetype-xlsx.svg'
 import { apiFetch, apiURL } from '@/shared/api/client'
+import {
+  isPageKey,
+  pageFromURL,
+  pagePath,
+} from '@/shared/lib/routes'
 import type {
   ClassificationChange,
   ClassificationResponse,
@@ -28,13 +33,13 @@ import AppHeader from '@/widgets/AppHeader.vue'
 import ClassLegendFooter from '@/widgets/ClassLegendFooter.vue'
 import SystemHistoryModal from '@/features/system-history/SystemHistoryModal.vue'
 import { useNavParser } from '@/features/nav-parser/useNavParser'
-import SettingsPage, { type SettingsPageViewModel } from '@/pages/settings/SettingsPage.vue'
+import type { FontSizePreset } from '@/features/appearance/AppearanceSettings.vue'
+import SettingsPage from '@/pages/settings/SettingsPage.vue'
+import AdminSettingsPage, { type AdminSettingsPageViewModel } from '@/pages/settings/AdminSettingsPage.vue'
 import ComparisonPage, { type ComparisonPageViewModel } from '@/pages/comparison/ComparisonPage.vue'
 import ClassificationPage, { type ClassificationPageViewModel } from '@/pages/classification/ClassificationPage.vue'
 import SystemsPage, { type SystemsPageViewModel } from '@/pages/systems/SystemsPage.vue'
 import ChangesPage, { type ChangesPageViewModel } from '@/pages/changes/ChangesPage.vue'
-
-type FontSizePreset = 'small' | 'standard' | 'large'
 
 const fontSizePresets: Array<{ key: FontSizePreset; label: string; size: number }> = [
   { key: 'small', label: 'Маленький', size: 12 },
@@ -52,12 +57,8 @@ const minimumAppFontSize = computed(() => (
   fontSizePresets.find((preset) => preset.key === fontSizePreset.value)?.size ?? 15
 ))
 
-
-const pageKeys = new Set(['changes', 'systems', 'classification', 'comparison', 'settings'])
-
 function pageFromLocation() {
-  const page = window.location.hash.replace(/^#\/?/, '')
-  return pageKeys.has(page) ? page : 'changes'
+  return pageFromURL(window.location)
 }
 
 const activePage = ref(pageFromLocation())
@@ -1622,12 +1623,12 @@ async function changeSystemDocumentPage(nextPage: number) {
 }
 
 function setPage(page: string, updateLocation = true) {
-  if (!pageKeys.has(page)) return
+  if (!isPageKey(page)) return
   activePage.value = page
   if (updateLocation) {
-    const nextHash = `#/${page}`
-    if (window.location.hash !== nextHash) {
-      window.location.hash = nextHash
+    const nextPath = pagePath(page)
+    if (window.location.pathname !== nextPath || window.location.hash) {
+      window.history.pushState({}, '', nextPath)
     }
   }
   openedSelect.value = null
@@ -1637,7 +1638,7 @@ function setPage(page: string, updateLocation = true) {
     void loadSystemDocuments()
   } else if (page === 'classification') {
     void loadClassificationCatalog()
-  } else if (page === 'settings') {
+  } else if (page === 'admin-settings') {
     void Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadDocumentTable(), loadNavParserSettings(), loadNavParserProgress(), loadNavParserRuns()])
   }
 }
@@ -2365,10 +2366,11 @@ function statusAccentColor(value: string) {
 }
 
 function pageTitle() {
+  if (activePage.value === 'admin-settings') return 'Настройки администратора'
   return navItems.find((item) => item.key === activePage.value)?.label ?? ''
 }
 
-const settingsPageModel: SettingsPageViewModel = {
+const settingsPageModel: AdminSettingsPageViewModel = {
   attachmentFileIcon,
   attachmentPendingIds,
   cancelNavParser,
@@ -2703,6 +2705,7 @@ onMounted(async () => {
   updateScrollTopVisibility()
   window.addEventListener('resize', updateClassificationCardColumns)
   window.addEventListener('scroll', updateScrollTopVisibility, { passive: true })
+  window.addEventListener('popstate', syncPageFromLocation)
   window.addEventListener('hashchange', syncPageFromLocation)
   await loadOrders()
   await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable(), loadNavParserSettings(), loadNavParserProgress(), loadNavParserRuns()])
@@ -2711,6 +2714,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateClassificationCardColumns)
   window.removeEventListener('scroll', updateScrollTopVisibility)
+  window.removeEventListener('popstate', syncPageFromLocation)
   window.removeEventListener('hashchange', syncPageFromLocation)
   if (systemDocumentSearchTimer) {
     window.clearTimeout(systemDocumentSearchTimer)
@@ -2753,13 +2757,22 @@ onBeforeUnmount(() => {
       <SystemsPage v-else-if="activePage === 'systems'" :model="systemsPageModel" />
       <ClassificationPage v-else-if="activePage === 'classification'" :model="classificationPageModel" />
       <ComparisonPage v-else-if="activePage === 'comparison'" :model="comparisonPageModel" />
-      <SettingsPage v-else-if="activePage === 'settings'" :model="settingsPageModel" />
+      <SettingsPage
+        v-else-if="activePage === 'settings'"
+        :font-size-preset="fontSizePreset"
+        :font-size-presets="fontSizePresets"
+        @update:font-size-preset="fontSizePreset = $event"
+      />
+      <AdminSettingsPage
+        v-else-if="activePage === 'admin-settings'"
+        :model="settingsPageModel"
+      />
       <section v-else class="placeholder-page">
         <h1>{{ pageTitle() }}</h1>
       </section>
 
       <ClassLegendFooter
-        v-if="activePage !== 'settings'"
+        v-if="activePage !== 'settings' && activePage !== 'admin-settings'"
         :include-forbidden="activePage !== 'changes'"
       />
     </main>
