@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Info } from '@lucide/vue'
-import logo from '@/shared/assets/tn-svetofor-logo.svg'
+import logo from '@/shared/assets/logo.png'
 import ClassLegend from '@/shared/ui/ClassLegend.vue'
 
 type NavigationItem = {
@@ -24,8 +24,8 @@ const emit = defineEmits<{
   <header class="site-header">
     <div class="header-container">
       <div class="main-header__inner">
-        <a class="brand-link" href="/" aria-label="ТН-Светофор">
-          <img :src="logo" alt="ТН-Светофор" />
+        <a class="brand-link" href="/" aria-label="Технониколь Светофор онлайн">
+          <img :src="logo" alt="Технониколь Светофор онлайн" />
         </a>
 
         <nav class="primary-nav" aria-label="Основная навигация">
