@@ -95,7 +95,7 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 				order_id, system_catalog_id, comment, comparison_selected,
 				attachment_name, attachment_content_type, attachment_size, attachment_data, created_at
 			)
-			SELECT $1, $2, state.comment, state.comparison_selected,
+			SELECT $1::BIGINT, $2::BIGINT, state.comment, state.comparison_selected,
 				state.attachment_name, state.attachment_content_type, state.attachment_size,
 				state.attachment_data, state.created_at
 			FROM (
@@ -107,7 +107,7 @@ func (r *SystemCatalogRepository) ReplaceAll(ctx context.Context, orderID int64,
 				LIMIT 1
 			) state
 			UNION ALL
-			SELECT $1, $2, '', FALSE, '', '', 0, NULL::BYTEA, NOW()
+			SELECT $1::BIGINT, $2::BIGINT, '', FALSE, '', '', 0, NULL::BYTEA, NOW()
 			WHERE NOT EXISTS (
 				SELECT 1 FROM preserved_system_document_state state
 				WHERE (NULLIF(BTRIM($3), '') IS NOT NULL AND state.code = $3)
