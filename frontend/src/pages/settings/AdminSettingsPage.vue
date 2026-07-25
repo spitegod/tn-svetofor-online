@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import {
   CloudUpload,
   Database,
@@ -87,9 +88,6 @@ const {
   navSettingsError,
   navSettingsMessage,
   openAttachmentPicker,
-  openOrderWorkbookImport,
-  openSystemCatalogImport,
-  openTableImport,
   openedNavParserRunId,
   openedSelect,
   orders,
@@ -139,6 +137,22 @@ const {
   visibleSettingsClassificationRows,
   visibleSettingsSystemCatalogRows,
 } = props.model
+
+const orderWorkbookInput = ref<HTMLInputElement | null>(null)
+const importFileInput = ref<HTMLInputElement | null>(null)
+const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
+
+function openOrderWorkbookImport() {
+  orderWorkbookInput.value?.click()
+}
+
+function openTableImport() {
+  importFileInput.value?.click()
+}
+
+function openSystemCatalogImport() {
+  systemCatalogFileInput.value?.click()
+}
 
 const navParserPanelModel: NavParserPanelViewModel = {
   cancelNavParser,

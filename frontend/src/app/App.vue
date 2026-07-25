@@ -131,9 +131,6 @@ const isHistoryOpen = ref(false)
 const openedSelect = ref<string | null>(null)
 const draggedComparisonOrderId = ref<number | null>(null)
 const comparisonDropIndex = ref<number | null>(null)
-const importFileInput = ref<HTMLInputElement | null>(null)
-const systemCatalogFileInput = ref<HTMLInputElement | null>(null)
-const orderWorkbookInput = ref<HTMLInputElement | null>(null)
 const classificationRows = ref<ClassificationChange[]>([])
 const classificationPageSize = usePersistedPageSize('changes', '50', ['50', '100', 'all'])
 const classificationPage = ref(1)
@@ -682,10 +679,6 @@ async function createOrder() {
   await Promise.all([loadClassificationChanges(), loadSystemCatalog(), loadClassificationCatalog(), loadSystemDocuments(), loadDocumentTable()])
 }
 
-function openOrderWorkbookImport() {
-  orderWorkbookInput.value?.click()
-}
-
 async function importOrderWorkbook(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -1092,10 +1085,6 @@ async function loadClassificationChanges() {
   }
 }
 
-function openTableImport() {
-  importFileInput.value?.click()
-}
-
 async function importTableFile(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -1389,10 +1378,6 @@ async function loadSystemCatalog(silent = false) {
       isSystemCatalogLoading.value = false
     }
   }
-}
-
-function openSystemCatalogImport() {
-  systemCatalogFileInput.value?.click()
 }
 
 async function importSystemCatalogFile(event: Event) {
@@ -2436,9 +2421,6 @@ const settingsPageModel: AdminSettingsPageViewModel = {
   navSettingsError,
   navSettingsMessage,
   openAttachmentPicker,
-  openOrderWorkbookImport,
-  openSystemCatalogImport,
-  openTableImport,
   openedNavParserRunId,
   openedSelect,
   orders,
