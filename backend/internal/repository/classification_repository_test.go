@@ -40,3 +40,28 @@ func TestClassificationUpdateReturnsConstructionType(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestClassificationStatsCountsNewSystemMarker(t *testing.T) {
+	database, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	mock.ExpectQuery(`COUNT\(\*\) FILTER \(WHERE class_before = 'Новая система'\) AS added_systems`).
+		WithArgs(int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"added_systems", "recommended", "allowed", "classification_changes",
+		}).AddRow(12, 7, 5, 3))
+
+	stats, err := NewClassificationRepository(database).Stats(context.Background(), 5)
+	if err != nil {
+		t.Fatalf("load classification stats: %v", err)
+	}
+	if stats.AddedSystems != 12 {
+		t.Fatalf("unexpected added systems count %d", stats.AddedSystems)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
