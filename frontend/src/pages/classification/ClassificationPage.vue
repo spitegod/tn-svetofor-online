@@ -52,7 +52,6 @@ const {
   hasActiveClassificationPageFilters,
   hideBrokenSystemTypeImage,
   isClassificationCatalogLoading,
-  isClassificationPrimaryFiltersOpen,
   isClassificationSearchPending,
   isSystemTypesOpen,
   openedClassificationFilter,
@@ -86,21 +85,14 @@ const {
 
 <template>
       <section class="classification-page">
-        <section class="changes-filters classification-page-filters" :class="{ 'is-collapsed': !isClassificationPrimaryFiltersOpen }" aria-label="Основные параметры классификации">
+        <section class="changes-filters classification-page-filters" aria-label="Основные параметры классификации">
           <header class="changes-filters__header">
-            <button
-              class="changes-filters__heading"
-              type="button"
-              :aria-expanded="isClassificationPrimaryFiltersOpen"
-              @click="isClassificationPrimaryFiltersOpen = !isClassificationPrimaryFiltersOpen"
-            >
+            <div class="changes-filters__heading">
               <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
               <div>
                 <h2>Основные параметры</h2>
-                <small v-if="!isClassificationPrimaryFiltersOpen">{{ selectedConstructionType }}</small>
               </div>
-              <ChevronDown class="changes-filters__collapse-chevron" :class="{ 'is-open': isClassificationPrimaryFiltersOpen }" :size="18" aria-hidden="true" />
-            </button>
+            </div>
             <div class="changes-filters__header-actions">
               <div class="select-field">
                 <span>Распоряжение</span>
@@ -129,9 +121,6 @@ const {
             </div>
           </header>
 
-          <Transition name="primary-filters">
-            <div v-if="isClassificationPrimaryFiltersOpen" class="primary-filters-body">
-              <div class="primary-filters-body__inner">
           <div class="changes-filters__group">
             <h3>Тип строительства</h3>
             <div class="type-tabs type-tabs--changes type-tabs--systems">
@@ -218,9 +207,6 @@ const {
               </Transition>
             </span>
           </div>
-              </div>
-            </div>
-          </Transition>
         </section>
 
         <div class="classification-layout">

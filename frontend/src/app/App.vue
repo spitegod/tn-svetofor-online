@@ -123,9 +123,6 @@ let systemDocumentRequestController: AbortController | null = null
 let documentTableRequestController: AbortController | null = null
 const selectedSystemTypeSlug = ref('')
 const isSystemTypesOpen = ref(false)
-const isChangesFiltersOpen = ref(true)
-const isSystemsFiltersOpen = ref(true)
-const isClassificationPrimaryFiltersOpen = ref(true)
 const selectedHistorySystem = ref<SystemDocumentRow | null>(null)
 const systemHistoryRows = ref<SystemDocumentRow[]>([])
 const isSystemHistoryLoading = ref(false)
@@ -1661,6 +1658,7 @@ function matchesSystemType(system: { characteristics?: SystemCharacteristic[] },
 
 function selectSystemType(type: SystemTypeOption) {
   selectedSystemTypeSlug.value = type.slug
+  isSystemTypesOpen.value = false
   systemDocumentPage.value = 1
   classificationCatalogPage.value = 1
   openedClassificationSystemId.value = null
@@ -1680,14 +1678,6 @@ function systemTypeImageSource(type: SystemTypeOption) {
 
 function selectConstructionType(type: string) {
   selectedConstructionType.value = type
-  isSystemTypesOpen.value = false
-  if (activePage.value === 'changes') {
-    isChangesFiltersOpen.value = false
-  } else if (activePage.value === 'systems') {
-    isSystemsFiltersOpen.value = false
-  } else if (activePage.value === 'classification') {
-    isClassificationPrimaryFiltersOpen.value = false
-  }
   classificationPage.value = 1
   systemDocumentPage.value = 1
   classificationCatalogPage.value = 1
@@ -2553,7 +2543,6 @@ const classificationPageModel: ClassificationPageViewModel = {
   hasActiveClassificationPageFilters,
   hideBrokenSystemTypeImage,
   isClassificationCatalogLoading,
-  isClassificationPrimaryFiltersOpen,
   isClassificationSearchPending,
   isSystemTypesOpen,
   openedClassificationFilter,
@@ -2599,7 +2588,6 @@ const systemsPageModel: SystemsPageViewModel = {
   isBulkComparisonUpdating,
   isSystemDocumentLoading,
   isSystemFiltering,
-  isSystemsFiltersOpen,
   isSystemTypesOpen,
   isSystemsRefreshDone,
   isSystemsRefreshing,
@@ -2663,7 +2651,6 @@ const changesPageModel: ChangesPageViewModel = {
   filterChangesByClass,
   hasActiveChangeFilters,
   isChangesRefreshDone,
-  isChangesFiltersOpen,
   isChangesRefreshing,
   isClassificationFiltering,
   isClassificationLoading,

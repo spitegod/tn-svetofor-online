@@ -37,7 +37,6 @@ const {
   isBulkComparisonUpdating,
   isSystemDocumentLoading,
   isSystemFiltering,
-  isSystemsFiltersOpen,
   isSystemTypesOpen,
   isSystemsRefreshDone,
   isSystemsRefreshing,
@@ -125,21 +124,14 @@ const {
           </article>
         </section>
 
-        <section class="changes-filters systems-filters" :class="{ 'is-collapsed': !isSystemsFiltersOpen }" aria-label="Фильтры списка систем">
+        <section class="changes-filters systems-filters" aria-label="Фильтры списка систем">
           <header class="changes-filters__header">
-            <button
-              class="changes-filters__heading"
-              type="button"
-              :aria-expanded="isSystemsFiltersOpen"
-              @click="isSystemsFiltersOpen = !isSystemsFiltersOpen"
-            >
+            <div class="changes-filters__heading">
               <span aria-hidden="true"><ListFilter :size="19" :stroke-width="1.9" /></span>
               <div>
                 <h2>Фильтры</h2>
-                <small v-if="!isSystemsFiltersOpen">{{ selectedConstructionType }}</small>
               </div>
-              <ChevronDown class="changes-filters__collapse-chevron" :class="{ 'is-open': isSystemsFiltersOpen }" :size="18" aria-hidden="true" />
-            </button>
+            </div>
             <div class="changes-filters__header-actions">
               <div class="select-field">
                 <span>Распоряжение</span>
@@ -175,9 +167,6 @@ const {
             </div>
           </header>
 
-          <Transition name="primary-filters">
-            <div v-if="isSystemsFiltersOpen" class="primary-filters-body">
-              <div class="primary-filters-body__inner">
           <div class="changes-filters__group systems-filters__construction">
             <h3>Тип строительства</h3>
             <div class="type-tabs type-tabs--changes type-tabs--systems">
@@ -314,9 +303,6 @@ const {
               </button>
             </section>
           </div>
-              </div>
-            </div>
-          </Transition>
         </section>
 
         <p v-if="systemCatalogError" class="table-message table-message--error">{{ systemCatalogError }}</p>

@@ -7434,12 +7434,6 @@ button:disabled {
   padding: 10px 16px;
   background: linear-gradient(100deg, #ffffff 0%, #fbfcfe 70%, #f6f8fb 100%);
   border-radius: 14px 14px 0 0;
-  transition: border-color 180ms ease, border-radius 180ms ease;
-}
-
-.changes-filters.is-collapsed .changes-filters__header {
-  border-bottom-color: transparent;
-  border-radius: 14px;
 }
 
 .changes-filters__heading {
@@ -7447,12 +7441,6 @@ button:disabled {
   min-width: 0;
   align-items: center;
   gap: 11px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  padding: 0;
-  text-align: left;
-  cursor: pointer;
 }
 
 .changes-filters__header-actions {
@@ -7498,69 +7486,6 @@ button:disabled {
 .changes-filters__heading > div {
   display: grid;
   gap: 2px;
-}
-
-.changes-filters__heading small {
-  max-width: min(420px, 42vw);
-  overflow: hidden;
-  color: #718097;
-  font-size: var(--app-min-font-size, 15px);
-  font-weight: 400;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.changes-filters__collapse-chevron {
-  flex: 0 0 auto;
-  color: #718097;
-  transform: rotate(-90deg);
-  transition: color 180ms ease, transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.changes-filters__collapse-chevron.is-open {
-  transform: rotate(0deg);
-}
-
-.changes-filters__heading:hover .changes-filters__collapse-chevron,
-.changes-filters__heading:focus-visible .changes-filters__collapse-chevron {
-  color: var(--tn-red);
-}
-
-.changes-filters__heading:focus-visible {
-  border-radius: 10px;
-  outline: 2px solid rgba(227, 6, 19, 0.3);
-  outline-offset: 4px;
-}
-
-.primary-filters-body {
-  display: grid;
-  min-width: 0;
-  grid-template-rows: 1fr;
-}
-
-.primary-filters-body__inner {
-  min-width: 0;
-  min-height: 0;
-}
-
-.primary-filters-enter-active,
-.primary-filters-leave-active {
-  overflow: hidden;
-  transition:
-    grid-template-rows 300ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 220ms ease;
-}
-
-.primary-filters-enter-active .primary-filters-body__inner,
-.primary-filters-leave-active .primary-filters-body__inner {
-  overflow: hidden;
-}
-
-.primary-filters-enter-from,
-.primary-filters-leave-to {
-  grid-template-rows: 0fr;
-  opacity: 0;
 }
 
 .changes-filters__heading h2,
