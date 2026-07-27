@@ -1677,6 +1677,7 @@ function systemTypeImageSource(type: SystemTypeOption) {
 
 function selectConstructionType(type: string) {
   selectedConstructionType.value = type
+  isSystemTypesOpen.value = false
   classificationPage.value = 1
   systemDocumentPage.value = 1
   classificationCatalogPage.value = 1
