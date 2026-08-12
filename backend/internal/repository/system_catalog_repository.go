@@ -264,6 +264,32 @@ func (r *SystemCatalogRepository) ParserRows(ctx context.Context) ([]model.Syste
 	return rows, nil
 }
 
+func (r *SystemCatalogRepository) KnownNavLinks(ctx context.Context) (map[string]string, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT system_key, system_url
+		FROM nav_systems
+		WHERE NULLIF(BTRIM(system_url), '') IS NOT NULL
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list known NAV links: %w", err)
+	}
+	defer rows.Close()
+
+	links := make(map[string]string)
+	for rows.Next() {
+		var systemKey string
+		var systemURL string
+		if err := rows.Scan(&systemKey, &systemURL); err != nil {
+			return nil, fmt.Errorf("scan known NAV link: %w", err)
+		}
+		links[systemKey] = systemURL
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate known NAV links: %w", err)
+	}
+	return links, nil
+}
+
 func (r *SystemCatalogRepository) SaveParsed(ctx context.Context, systemName string, systemURL string, characteristics []model.SystemCharacteristic) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {

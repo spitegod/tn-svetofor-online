@@ -78,6 +78,28 @@ func TestSystemLinkFromSearchRejectsSimilarName(t *testing.T) {
 	}
 }
 
+func TestSystemLinkFromKnownURLReusesCatalogType(t *testing.T) {
+	row := model.SystemCatalogRow{
+		SystemName: "ТН-КРОВЛЯ Тест",
+		SystemURL:  "https://nav.tn.ru/systems/ploskaya-krysha/tn-krovlya-test/?source=import",
+	}
+	knownLink := navSystemLink{
+		Name: "СИСТЕМА ТН-КРОВЛЯ Тест", URL: "https://nav.tn.ru/systems/ploskaya-krysha/tn-krovlya-test/", SystemType: "Плоская крыша",
+	}
+	link, ok := systemLinkFromKnownURL(row.SystemName, row.SystemURL, map[string]navSystemLink{
+		knownLink.URL: knownLink,
+	})
+	if !ok || link.SystemType != "Плоская крыша" {
+		t.Fatalf("expected catalog link and type, got %#v, %v", link, ok)
+	}
+}
+
+func TestSystemLinkFromKnownURLRejectsExternalHost(t *testing.T) {
+	if _, ok := systemLinkFromKnownURL("Test", "https://example.com/systems/test/type/", nil); ok {
+		t.Fatal("expected external known URL to be rejected")
+	}
+}
+
 func TestResolveNavAssetURLRejectsExternalHost(t *testing.T) {
 	if resolved := resolveNavAssetURL("https://example.com/image.webp"); resolved != "" {
 		t.Fatalf("expected external image URL to be rejected, got %q", resolved)
@@ -125,6 +147,9 @@ func (r *navParserRepositoryStub) AcquireNavParserLock(context.Context) (func(),
 }
 func (r *navParserRepositoryStub) ParserRows(context.Context) ([]model.SystemCatalogRow, error) {
 	return nil, nil
+}
+func (r *navParserRepositoryStub) KnownNavLinks(context.Context) (map[string]string, error) {
+	return map[string]string{}, nil
 }
 func (r *navParserRepositoryStub) SaveParsed(context.Context, string, string, []model.SystemCharacteristic) error {
 	return nil

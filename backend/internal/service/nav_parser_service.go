@@ -24,6 +24,8 @@ import (
 
 const navBaseURL = "https://nav.tn.ru"
 
+const navHTTPUserAgent = "tn-svetofor/0.1 (+internal monitoring tool)"
+
 const (
 	maxNavCategories    = 200
 	maxNavCategoryPages = 200
@@ -47,6 +49,7 @@ type NavParserService struct {
 type navParserRepository interface {
 	AcquireNavParserLock(context.Context) (func(), bool, error)
 	ParserRows(context.Context) ([]model.SystemCatalogRow, error)
+	KnownNavLinks(context.Context) (map[string]string, error)
 	SaveParsed(context.Context, string, string, []model.SystemCharacteristic) error
 	ReplaceSystemTypes(context.Context, []model.SystemTypeOption) error
 	SystemTypes(context.Context) ([]model.SystemTypeOption, error)
@@ -207,11 +210,23 @@ func (s *NavParserService) runPreparedParse(ctx context.Context, cancel context.
 	}
 	s.setProgressStage("Сопоставление", "Сопоставляем системы с каталогом NAV", 28)
 	linksByName := make(map[string]navSystemLink, len(links))
+	linksByURL := make(map[string]navSystemLink, len(links))
 	for _, link := range links {
 		key := normalizeSystemName(link.Name)
 		if _, exists := linksByName[key]; !exists {
 			linksByName[key] = link
 		}
+		withoutPrefix := strings.TrimPrefix(key, "система ")
+		if withoutPrefix != key {
+			if _, exists := linksByName[withoutPrefix]; !exists {
+				linksByName[withoutPrefix] = link
+			}
+		}
+		linksByURL[normalizedNAVURL(link.URL)] = link
+	}
+	knownNavLinks, err := s.repo.KnownNavLinks(ctx)
+	if err != nil {
+		return report, err
 	}
 
 	type parseJob struct {
@@ -223,7 +238,18 @@ func (s *NavParserService) runPreparedParse(ctx context.Context, cancel context.
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		link, ok := linksByName[normalizeSystemName(row.SystemName)]
+		rowKey := normalizeSystemName(row.SystemName)
+		link, ok := linksByName[rowKey]
+		if !ok {
+			link, ok = linksByName[strings.TrimPrefix(rowKey, "система ")]
+		}
+		knownURL := row.SystemURL
+		if knownURL == "" {
+			knownURL = knownNavLinks[rowKey]
+		}
+		if !ok && knownURL != "" {
+			link, ok = systemLinkFromKnownURL(row.SystemName, knownURL, linksByURL)
+		}
 		if !ok && settings.FallbackSearch {
 			link, ok = s.searchSystem(ctx, row.SystemName)
 			if ok {
@@ -305,6 +331,33 @@ func (s *NavParserService) runPreparedParse(ctx context.Context, cancel context.
 
 	s.completeProgress(report)
 	return report, nil
+}
+
+func systemLinkFromKnownURL(systemName string, systemURL string, linksByURL map[string]navSystemLink) (navSystemLink, bool) {
+	known, err := url.Parse(strings.TrimSpace(systemURL))
+	if err != nil || known.Scheme != "https" || known.Hostname() != "nav.tn.ru" {
+		return navSystemLink{}, false
+	}
+	known.RawQuery = ""
+	known.Fragment = ""
+	if link, exists := linksByURL[normalizedNAVURL(known.String())]; exists {
+		return link, true
+	}
+	parts := pathParts(known.Path)
+	if len(parts) != 3 || parts[0] != "systems" {
+		return navSystemLink{}, false
+	}
+	return navSystemLink{Name: systemName, URL: known.String()}, true
+}
+
+func normalizedNAVURL(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return ""
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func (s *NavParserService) Cancel() error {
@@ -851,7 +904,7 @@ func (s *NavParserService) fetchDocumentOnce(ctx context.Context, address string
 	if err := validateTNURL(request.URL); err != nil {
 		return nil, false, err
 	}
-	request.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TNSvetofor/1.0; +https://nav.tn.ru/)")
+	request.Header.Set("User-Agent", navHTTPUserAgent)
 	request.Header.Set("Accept-Language", "ru-RU,ru;q=0.9")
 	response, err := s.client.Do(request)
 	if err != nil {
@@ -862,8 +915,20 @@ func (s *NavParserService) fetchDocumentOnce(ctx context.Context, address string
 		retry := response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= http.StatusInternalServerError
 		return nil, retry, fmt.Errorf("unexpected HTTP status %s", response.Status)
 	}
-	document, err := html.Parse(io.LimitReader(response.Body, 12<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, 12<<20))
+	if err != nil {
+		return nil, true, err
+	}
+	if isNAVBrowserChallenge(body) {
+		return nil, true, fmt.Errorf("nav.tn.ru returned browser verification instead of content")
+	}
+	document, err := html.Parse(bytes.NewReader(body))
 	return document, false, err
+}
+
+func isNAVBrowserChallenge(body []byte) bool {
+	return bytes.Contains(body, []byte("js-challenge-loader")) ||
+		bytes.Contains(body, []byte("servicepipe.tech/static/checkjs"))
 }
 
 func (s *NavParserService) fetchImage(ctx context.Context, address string) (string, []byte, error) {
@@ -874,7 +939,7 @@ func (s *NavParserService) fetchImage(ctx context.Context, address string) (stri
 	if err := validateTNURL(request.URL); err != nil {
 		return "", nil, err
 	}
-	request.Header.Set("User-Agent", "Mozilla/5.0 (compatible; TNSvetofor/1.0; +https://nav.tn.ru/)")
+	request.Header.Set("User-Agent", navHTTPUserAgent)
 	request.Header.Set("Referer", navBaseURL+"/systems/")
 	response, err := s.client.Do(request)
 	if err != nil {
